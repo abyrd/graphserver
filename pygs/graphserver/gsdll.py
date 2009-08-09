@@ -27,8 +27,16 @@ for _dlldir in _dlldirs:
 if not lgs:
     raise ImportError("unable to find libgraphserver shared library in the usual locations: %s" % "\n".join(_dlldirs))
 
-libc = cdll.LoadLibrary(find_library('c'))
-
+# Adapted from ctypes.test.test_loading
+# Find and load the c runtime library
+libc_name = None
+if sys.platform == "cygwin":
+  libc_name = "cygwin1.dll"
+else:
+  libc_name = find_library("c")
+if not libc_name:
+  raise ImportError('could not determine which c runtime library to use')
+libc = cdll.LoadLibrary(libc_name)
 
 class _EmptyClass(object):
     pass
