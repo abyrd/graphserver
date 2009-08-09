@@ -27,7 +27,7 @@ def process_street_graph(osmdb_filename, graphdb_filename, profiledb_filename, s
     graphdb = GraphDatabase( graphdb_filename, overwrite=True )
     graphdb.populate( g, reporter=sys.stdout )
     
-def process_transit_graph(graphdb_filename, gtfsdb_filenames, osmdb_filename=None, profiledb_filename=None, agency_id=None, link_stations=False, slogs={}):
+def process_transit_graph(graphdb_filename, gtfsdb_filenames, osmdb_filename=None, profiledb_filename=None, agency_id=None, link_radius=None, link_obstruction=1, slogs={}):
     g = Graph()
 
     if profiledb_filename:
@@ -52,8 +52,8 @@ def process_transit_graph(graphdb_filename, gtfsdb_filenames, osmdb_filename=Non
         if osmdb_filename:
             compiler.load_transit_street_links_to_graph( g, osmdb, gtfsdb, reporter=sys.stdout )
         
-        if link_stations:
-            compiler.link_nearby_stops( g, gtfsdb )
+        if link_radius:
+            compiler.link_nearby_stops( g, gtfsdb, link_radius, link_obstruction )
 
     # Export to graphdb ========================
     
@@ -67,9 +67,12 @@ def main():
     parser = OptionParser(usage=usage)
     parser.add_option("-o", "--osmdb", dest="osmdb_filename", default=None,
                       help="conflate with the compiled OSMDB", metavar="FILE")
-    parser.add_option("-l", "--link",
-                      action="store_true", dest="link", default=False,
+    parser.add_option("-l", "--link", default=None,
+                      action="store", type="int", dest="link_radius", 
                       help="create walking links between adjacent/nearby stations if not compiling with an OSMDB")
+    parser.add_option("-b", "--obstruction",
+                      action="store", type="float", dest="link_obstruction", default = 1, 
+                      help="true distances will be multiplied by this factor to simulate street structure (1.4 is roughly a rectangular street grid)")
     parser.add_option("-g", "--gtfsdb",
                       action="append", dest="gtfsdb_files", default=[],
                       help="compile with the specified GTFS file(s)")
@@ -100,11 +103,16 @@ def main():
         process_street_graph(options.osmdb_filename, graphdb_filename, options.profiledb_filename, slogs)
         exit(0)
     
-    
+    if options.link_radius and options.osmdb_filename : 
+        options.link_radius = None
+        print 'osmdb file specified, stop linking disabled.'
+        
     process_transit_graph(graphdb_filename, options.gtfsdb_files,
                           osmdb_filename=options.osmdb_filename,
                           profiledb_filename=options.profiledb_filename,
-                          link_stations=options.link and not options.osmdb_filename, slogs=slogs)
+                          link_radius=options.link_radius, 
+                          link_obstruction=options.link_obstruction,
+                          slogs=slogs)
     exit(0)
         
 if __name__=='__main__': main()
