@@ -36,7 +36,9 @@ class GraphDatabase:
         
         n = len(graph.vertices)
         for i, vv in enumerate( graph.vertices ):
-            if reporter and i%(n//100)==0: reporter.write( "%d/%d vertices dumped\n"%(i,n) )
+            if reporter and i%1000==0 : 
+                reporter.write( "\r%d/%d vertices dumped" % (i,n) )
+                reporter.flush()
             
             c.execute( "INSERT INTO vertices VALUES (?)", (vv.label,) )
             for ee in vv.outgoing:
@@ -46,6 +48,7 @@ class GraphDatabase:
                     for name, resource in ee.payload.__resources__():
                         self.store( name, resource )
         
+        if reporter : reporter.write( "\rDumped %d vertices.          \n" % (i) )
         self.conn.commit()
         c.close()
         

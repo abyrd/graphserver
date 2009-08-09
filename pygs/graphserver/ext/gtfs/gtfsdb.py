@@ -244,7 +244,9 @@ class GTFSDatabase:
 
         c.execute( "SELECT trip_id FROM trips" )
         for i, (trip_id,) in enumerate(c):
-            if reporter and i%(n_trips//50)==0: reporter.write( "%d/%d trips grouped by %d patterns\n"%(i,n_trips,len(bundles)))
+            if reporter and i % 500 == 0 : 
+                reporter.write( "\r%d/%d trips grouped by %d patterns" % (i,n_trips,len(bundles)))
+                reporter.flush()
             
             d = self.conn.cursor()
             d.execute( "SELECT trip_id, arrival_time, departure_time, stop_id FROM stop_times WHERE trip_id=? ORDER BY stop_sequence", (trip_id,) )
@@ -272,7 +274,7 @@ class GTFSDatabase:
             #    break
 
         c.close()
-        
+        if reporter : reporter.write( "\rGrouped %d trips by %d patterns.     \n" % (n_trips, len(bundles)))
         return bundles.values()
         
     def nearby_stops(self, lat, lon, radius):

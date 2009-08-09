@@ -116,10 +116,14 @@ def load_gtfsdb_to_boardalight_graph(g, agency_namespace, gtfsdb, agency_id, ser
     if reporter: reporter.write( "Loading trip bundles into graph...\n" )
     n_bundles = len(bundles)
     for i, bundle in enumerate(bundles):
-        if reporter and i%((n_bundles//100)+1)==0: reporter.write( "%d/%d trip bundles loaded\n"%(i, n_bundles) )
+        if reporter and i % 10 == 0 : 
+            reporter.write( "\r%d/%d trip bundles loaded"%(i, n_bundles) )
+            reporter.flush()
         
         for service_id in service_ids:
             load_bundle_to_boardalight_graph(g, agency_namespace, bundle, service_id, sc, tz)
+
+    if reporter : reporter.write( '\rLoaded %d trip bundles.     \n' % (n_bundles) )
             
     # load headways
     if reporter: reporter.write( "Loading headways trips to graph...\n" )
