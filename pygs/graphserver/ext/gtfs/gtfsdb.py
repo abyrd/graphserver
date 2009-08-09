@@ -275,11 +275,30 @@ class GTFSDatabase:
         
         return bundles.values()
         
-    def nearby_stops(self, lat, lng, range):
+    def nearby_stops(self, lat, lon, radius):
+        # first-cut bounding box (in degrees) using spherical law of cosines
+        # based on Chris Veness at http://www.movable-type.co.uk/scripts/latlong-db.html (LGPL)
+        # warning: will not work in Chukotka Autonomous Okrug and some parts of Fiji!
+        from math import degrees, radians, cos
+        EARTH_RADIUS = 6371000.0 # meters. assume spherical geoid.
+        
+        # degrees of latitude give relatively constant distances
+        angular_distance_rad = radius / EARTH_RADIUS
+        angular_distance_deg_lat = degrees(angular_distance_rad)
+        min_lat = lat - angular_distance_deg_lat
+        max_lat = lat + angular_distance_deg_lat
+
+        # compensate for degrees longitude getting smaller with increasing latitude
+        angular_distance_deg_lon = degrees( angular_distance_rad / cos( radians(lat) ) )
+        min_lon = lon - angular_distance_deg_lon
+        max_lon = lon + angular_distance_deg_lon
+        # debug:
+        # print " latitude: %f %f %f" % (min_lat, lat, max_lat)
+        # print "longitude: %f %f %f" % (min_lon, lon, max_lon)
         c = self.conn.cursor()
-        
-        c.execute( "SELECT * FROM stops WHERE stop_lat BETWEEN ? AND ? AND stop_lon BETWEEN ? And ?", (lat-range, lat+range, lng-range, lng+range) )
-        
+        # query should be done on an indexed database
+        # gtfsdb already creates the lat/lon indices automatically.
+        c.execute( "SELECT * FROM stops WHERE stop_lat BETWEEN ? AND ? AND stop_lon BETWEEN ? AND ?", (min_lat, max_lat, min_lon, max_lon) )
         for row in c:
             yield row
 

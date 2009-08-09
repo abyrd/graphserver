@@ -153,27 +153,32 @@ def load_gtfsdb_to_boardalight_graph(g, agency_namespace, gtfsdb, agency_id, ser
         g.add_edge( "sta-%s"%stop_id1, "sta-%s"%stop_id2, Street( conn_type, distance ) )
         g.add_edge( "sta-%s"%stop_id2, "sta-%s"%stop_id1, Street( conn_type, distance ) )
             
-def link_nearby_stops(g, gtfsdb, range=0.05, obstruction=1.4):
-    """Adds Street links of length obstruction*dist(A,B) directly between all station pairs closer than <range>"""
-
-    print "Linking nearby stops..."
-
-    for stop_id1, stop_name1, lat1, lon1 in gtfsdb.stops():
-        g.add_vertex( "sta-%s"%stop_id1 )
+def link_nearby_stops(g, gtfsdb, radius=1000, obstruction=1, reporter=sys.stdout):
+    """Adds Street links of length obstruction * dist(A,B) directly between all station pairs with obstructed distance less than <radius> meters."""
+    if reporter : reporter.write( 'Linking stops within %i meters using obstruction factor %f...\n' % (radius, obstruction) )
+    stoplist = gtfsdb.stops()
+    n_stops = len(stoplist)
+    n_done = 0
+    n_links = 0
+    
+    for ( stop_id1, stop_name1, lat1, lon1 ) in stoplist :
+        # bounding box from nearby_stops will be big enough only for obstruction >= 1
+        for stop_id2, stop_name2, lat2, lon2 in gtfsdb.nearby_stops( lat1, lon1, radius ) :
+            if stop_id1 == stop_id2 : continue
+            dd = obstruction * vincenty( lat1, lon1, lat2, lon2 )
+            # if link distance is zero, target could be removed from stoplist to avoid redundancy.
+            if dd < radius :
+                # debug:
+                # print '%4i meters from %s to %s\n' % (dd, stop_id1, stop_id2)
+                g.add_edge( "sta-%s"%stop_id1, "sta-%s"%stop_id2, Street("walk", dd) )
+                n_links += 1
         
-        for stop_id2, stop_name2, lat2, lon2 in gtfsdb.nearby_stops(lat1, lon1, range):
-            if stop_id1 == stop_id2:
-                continue
+        n_done += 1
+        if reporter and n_done % 100 == 0 : 
+            reporter.write( '\r%i/%i stops, %i links' % (n_done, n_stops, n_links) )
+            reporter.flush()
             
-            print "linking %s to %s"%(stop_id1, stop_id2)
-            
-            g.add_vertex( "sta-%s"%stop_id2 )
-            
-            dd = obstruction*vincenty( lat1, lon1, lat2, lon2 )
-            print dd
-            
-            g.add_edge( "sta-%s"%stop_id1, "sta-%s"%stop_id2, Street("walk", dd) )
-            g.add_edge( "sta-%s"%stop_id2, "sta-%s"%stop_id1, Street("walk", dd) )
+    if reporter : reporter.write( '\rCreated %i links for %i stops.\n' % (n_links, n_stops) )
 
 def profile_rise_fall(profile):
     rise = 0
