@@ -67,13 +67,13 @@ class Graph(CShadow):
         self._cdel(self.soul, free_vertex_payloads, free_edge_payloads)
         self.soul = None
             
-    def serialize(self, filename):
+    def serialize(self, filename, mmap_filename):
         self.check_destroyed()
-        lgs.gSerialize(self.soul, c_char_p(filename))
+        lgs.gSerialize(self.soul, c_char_p(filename), c_char_p(mmap_filename))
     
-    def load(self, filename):
+    def load(self, filename, mmap_filename):
         self.check_destroyed()
-        lgs.gDeserialize(self.soul, c_char_p(filename))
+        lgs.gDeserialize(self.soul, c_char_p(filename), c_char_p(mmap_filename))
                 
     def add_vertex(self, label):
         #Vertex* gAddVertex( Graph* this, char *label );
