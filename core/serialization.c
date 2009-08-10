@@ -825,7 +825,7 @@ scDeserialize(FILE* f, void* mm_data) {
 		for (j = 0; j < pt.n_service_ids; j++) {
 			FREAD_TYPE(sids[j], ServiceId);
 		}
-		p = spNew(pt.begin_time, pt.end_time, num_sps, sids);
+		p = spNew(pt.begin_time, pt.end_time, pt.n_service_ids, sids);
 		free(sids);
 		scAddPeriod(sc, p);
 	}
