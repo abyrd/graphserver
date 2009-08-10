@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <stdint.h>
 
 #include "statetypes.h"
 #include "graph.h"
@@ -18,6 +19,9 @@
 #else
   #define LOG(...) /* __VA_ARGS__ */
 #endif 
+
+/* Four-byte block to identify a Graphserver file and verify endianness of data */
+#define FILE_SIGNATURE 0xEDF15105 
 
 #define STRING_BUFF(name, len) char name[len]; size_t name ## _buff_len
 #define BUFF_SIZE size_t __buff_size = 0
@@ -78,7 +82,8 @@ void get_cal_and_tz(EdgePayload* payload, ServiceCalendar** sc, Timezone** tz);
 bool gDeserialize(Graph *g, char* gbin_name, char * mmf_name) {
 	FILE *f, *mmf = NULL;
 	void * mm_data = NULL;
-	
+	uint32_t endian_sig;
+	uint8_t  type_size;
 	char f_ind_name[1024];
 	long num_vertices, num_edges, num_calendars, num_timezones;
 	STRING_BUFF(label,256);
@@ -94,7 +99,7 @@ bool gDeserialize(Graph *g, char* gbin_name, char * mmf_name) {
 	ServiceCalendar** calendars = NULL;
 	Timezone** timezones = NULL; 
 	
-	// open the index, get the number of vertices
+	// open the index
 	sprintf(f_ind_name, "%s", gbin_name);
 	if ((f = fopen(f_ind_name, "rb")) == NULL) {
 		return false;
@@ -115,6 +120,36 @@ bool gDeserialize(Graph *g, char* gbin_name, char * mmf_name) {
 	   assert(mm_data != (void *)-1);
 	}
 	
+	// Read the file header to check platform compatibility
+
+	// Read a 32 bit integer as signature and check endianness
+	FREAD_TYPE(endian_sig, uint32_t);
+	LOG("signature is %08x.\n", endian_sig);
+	assert(endian_sig == FILE_SIGNATURE); 
+	
+	// Read the size of all types
+	// Exact-size type substitutions and sizeof are evaluated at compile time
+	FREAD_TYPE(type_size, uint8_t);
+	LOG("sizof(char) for this file is %d.\n", type_size);
+	assert(type_size == sizeof(char)); 
+	
+	FREAD_TYPE(type_size, uint8_t);
+	LOG("sizof(int) for this file is %d.\n", type_size);
+	assert(type_size == sizeof(int)); 
+	
+	FREAD_TYPE(type_size, uint8_t);
+	LOG("sizof(long) for this file is %d.\n", type_size);
+	assert(type_size == sizeof(long)); 
+	
+	FREAD_TYPE(type_size, uint8_t);
+	LOG("sizof(float) for this file is %d.\n", type_size);
+	assert(type_size == sizeof(float)); 
+	
+	FREAD_TYPE(type_size, uint8_t);
+	LOG("sizof(double) for this file is %d.\n", type_size);
+	assert(type_size == sizeof(double)); 
+    
+    
 	//Read the # of vertices.
 	
 	FREAD_TYPE(num_vertices, long);
@@ -194,6 +229,8 @@ bool gSerialize(Graph *g, char* gbin_name, char * mmf_name) {
 	long i, j;
 	Vertex** verts;
 	bool flag;
+	uint32_t endian_sig = FILE_SIGNATURE;
+	uint8_t  type_size;
 	
 	// open the index, get the number of vertices
 	sprintf(f_ind_name, "%s", gbin_name);
@@ -210,6 +247,24 @@ bool gSerialize(Graph *g, char* gbin_name, char * mmf_name) {
 	num_edges = 0;
 	num_timezones = 0;
 	num_calendars = 0;
+	
+	// Write a file header to check platform compatibility
+	
+	// Write a 32 bit integer as endianness signature
+	FWRITE_TYPE(endian_sig, uint32_t);
+	
+	// Write the size of all types
+	// Sizeof is substituted at compile time
+	type_size = sizeof(char);
+	FWRITE_TYPE(type_size, uint8_t);
+	type_size = sizeof(int);
+	FWRITE_TYPE(type_size, uint8_t);
+	type_size = sizeof(long);
+	FWRITE_TYPE(type_size, uint8_t);
+	type_size = sizeof(float);
+	FWRITE_TYPE(type_size, uint8_t);
+	type_size = sizeof(double);
+	FWRITE_TYPE(type_size, uint8_t);
 	
 	//calendars = (ServiceCalendar**)malloc(sizeof(ServiceCalendar*)*32);
 	//timezones = (Timezone**)malloc(sizeof(Timezone*)*32);
