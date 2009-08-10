@@ -32,7 +32,9 @@ def compare_contents(g1, g2) :
         ep2.sort() 
         if ep1 != ep2 :
             result = False
-            print "Error at:", v1.label,
+            print "Error at:", v1.label
+            print ep1
+            print ep2
             break
     
     print result
