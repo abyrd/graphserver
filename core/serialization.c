@@ -37,19 +37,21 @@
 #define __DESERIALIZE(name) LOG("Deserializing " #name "\n"); gAddEdge(g, label, label2, name ## Deserialize(f, mm_data))
 #define __DESERIALIZE_W_CAL_TZ(name, sc, tz) LOG("Deserializing " #name "\n"); gAddEdge(g, label, label2, name ## Deserialize(sc, tz, f, mm_data))
 
-#define MM_POS_WRITING long mm_cur_pos = ftell(mmf);
+#define MM_POS_WRITING long mm_cur_pos = ftell(mmf); int padding = 0;
 #define MM_POS_READING long mm_cur_pos = 0;
-#define FWRITE_MM_POS fwrite(&mm_cur_pos,sizeof(long),1,f)
 #define FREAD_MM_POS FREAD_TYPE(mm_cur_pos, long);
 
 #define MWRITE_STRING(buff) \
 __buff_size = strlen(buff); \
 LOG("\twm str[%d] @ %d\n", __buff_size, __LINE__); \
-fwrite(buff,1,__buff_size+1,mmf);
+assert(mm_cur_pos %4 == 0);	\
+fwrite(buff,1,__buff_size+1,mmf); \
+fwrite(&padding,1,ftell(mmf)%4,mmf);
 
 #define MWRITE_TYPE(outvar,type) \
 mm_cur_pos = ftell(mmf); \
-fwrite(&outvar,1,sizeof(type),mmf);
+fwrite(&outvar,1,sizeof(type),mmf); \
+fwrite(&padding,1,ftell(mmf)%4,mmf);
 // \
 //mm_seg_len = mm_seg_len + sizeof(type)
 
