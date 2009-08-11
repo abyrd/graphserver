@@ -37,11 +37,11 @@ static void * mmmalloc_top  = NULL;
 static int mmmalloc_fd;
 static int mmmalloc_on = 0;
 
-int mmon ( ) {
+int mmgrab ( ) {
     mmmalloc_fd = open("mmmalloc.mmap", O_CREAT | O_RDWR , 0664);
     ftruncate( mmmalloc_fd , ALLOC_SPACE );
     mmmalloc_base = mmap( OSX_BASE_BIG, ALLOC_SPACE, PROT_READ | PROT_WRITE, 
-                          MAP_SHARED, mmmalloc_fd, 0);
+                         MAP_SHARED, mmmalloc_fd, 0);
     
     if ( mmmalloc_base != OSX_BASE_BIG ) { 
         printf( "Unable to obtain requested block.\n"); 
@@ -49,13 +49,21 @@ int mmon ( ) {
     } else {
         printf( "mmmalloc got 0x%08x bytes at 0x%08x.\n", ALLOC_SPACE, (uint) mmmalloc_base );
     }
-    mmmalloc_top = mmmalloc_base;
+    mmmalloc_top = mmmalloc_base;    
+    return 0;
+}
+
+int mmon ( ) {
     mmmalloc_on = 1; 
     return 0;
 }
 
-int mmoff () {
+int mmoff ( ) {
     mmmalloc_on = 0;
+    return 0;
+}
+
+int mmrelease ( ) {
     munmap(mmmalloc_base, mmmalloc_top - mmmalloc_base);
     close(mmmalloc_fd);
     return 0;
@@ -63,9 +71,8 @@ int mmoff () {
 
 void * mmmalloc(size_t size) {
     if (mmmalloc_on) {
+        if (!mmmalloc_base) mmgrab();
         printf("mm ");
-        // because Graphserver uses malloc before a graph is instantiated.
-        if (!mmmalloc_base) mmon(); 
         // should be something here to resize the mmap when needed.
         // or at least check for available space
         void * ret = mmmalloc_top;
