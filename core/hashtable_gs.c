@@ -1,4 +1,5 @@
 #include "hashtable_gs.h"
+#include "mmmalloc.h"
 
 static unsigned int
 quickhash(void *str)

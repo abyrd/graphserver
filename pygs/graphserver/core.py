@@ -19,6 +19,14 @@ def indent( a, n ):
 def unparse_secs(secs):
     return "%02d:%02d:%02d"%(secs/3600, (secs%3600)/60, secs%60)
 
+# Turn on and off mmapping memory allocation
+
+def mmon () : 
+    lgs.mmon();
+
+def mmoff () :
+    lgs.mmoff();
+
 """
 
 These classes map C structs to Python Ctypes Structures.

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include "mmmalloc.h"
 
 /*
 Credit for primes table: Aaron Krowne

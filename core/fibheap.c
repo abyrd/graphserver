@@ -19,6 +19,8 @@ along with GNU CC; see the file COPYING.  If not, write to
 the Free Software Foundation, 51 Franklin Street - Fifth Floor,
 Boston, MA 02110-1301, USA.  */
 
+#include "mmmalloc.h"
+
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif

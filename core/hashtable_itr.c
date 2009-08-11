@@ -4,6 +4,7 @@
 #include "hashtable_private.h"
 #include "hashtable_itr.h"
 #include <stdlib.h> /* defines NULL */
+#include "mmmalloc.h"
 
 /*****************************************************************************/
 /* hashtable_iterator    - iterator constructor */

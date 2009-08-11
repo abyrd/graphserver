@@ -1,5 +1,6 @@
 
 #include "dirfibheap.h"
+#include "mmmalloc.h"
 
 dirfibheap_t 
 dirfibheap_new(long initSize)
