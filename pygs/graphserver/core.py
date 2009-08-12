@@ -161,6 +161,32 @@ class Graph(CShadow):
         else:
             return self._cshortest_path_tree_retro( self.soul, fromv, tov, finalstate.soul, walk_options.soul, c_long(mintime) )
 
+    def shortest_path_in_place(self, fromv, tov, initstate, walk_options=None, maxtime=2000000000):
+        self.check_destroyed()
+        if not tov:
+            tov = "*bogus^*^vertex*"
+        
+        if walk_options is None:
+            walk_options = WalkOptions()
+            ret = self._cshortest_path_in_place( self.soul, fromv, tov, initstate.soul, walk_options.soul, c_long(maxtime) )
+            walk_options.destroy()
+            return ret
+        else:
+            return self._cshortest_path_in_place( self.soul, fromv, tov, initstate.soul, walk_options.soul, c_long(maxtime) )
+        
+    def shortest_path_tree_in_place_retro(self, fromv, tov, finalstate, walk_options=None, mintime=0):
+        self.check_destroyed()
+        if not fromv:
+            fromv = "*bogus^*^vertex*"
+            
+        if walk_options is None:
+            walk_options = WalkOptions()
+            ret = self._cshortest_path_in_place_retro( self.soul, fromv, tov, finalstate.soul, walk_options.soul, c_long(mintime) )
+            walk_options.destroy()
+            return ret
+        else:
+            return self._cshortest_path_in_place_retro( self.soul, fromv, tov, finalstate.soul, walk_options.soul, c_long(mintime) )
+
     def to_dot(self):
         self.check_destroyed()
         
@@ -1302,6 +1328,8 @@ Graph._cget_vertex = ccast(lgs.gGetVertex, Vertex)
 Graph._cadd_edge = ccast(lgs.gAddEdge, Edge)
 Graph._cshortest_path_tree = ccast(lgs.gShortestPathTree, ShortestPathTree)
 Graph._cshortest_path_tree_retro = ccast(lgs.gShortestPathTreeRetro, ShortestPathTree)
+Graph._cshortest_path_in_place = lgs.gShortestPathInPlace
+Graph._cshortest_path_in_place_retro = lgs.gShortestPathInPlaceRetro
 
 Vertex._cnew = lgs.vNew
 Vertex._cdel = lgs.vDestroy
