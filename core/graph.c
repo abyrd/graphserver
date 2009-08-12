@@ -214,6 +214,24 @@ gShortestPath( Graph* this, char *from, char *to, State* init_state, int directi
   return ret;
 }
 
+// just to check paths on screen, should really return an array of States like gShortestPath
+State*
+gPathInPlace( Graph* this, char* to ) {
+    State* s;
+    Vertex* v = gGetVertex( this, to );
+    if (v) {
+        s = v->payload;
+        printf("walked %f meters, %i vehicles.\n\n", s->dist_walked, s->num_transfers);
+    }
+    while (v) {
+        s = v->payload;
+        printf( "%15s %011li %3li %10s\n", v->label, s->time, s->weight / 60, s->trip_id );
+        if (v->spt_parent) v = v->spt_parent;
+        else v = NULL;
+    }
+    return NULL;
+}
+
 void**
 sptPathRetro(Graph* g, char* origin_label, int* vertex_cnt) {
 	Vertex* curr = gGetVertex(g, origin_label);
@@ -289,7 +307,7 @@ vNew( char* label ) {
     this->outgoing = liNew( NULL ) ;
     this->incoming = liNew( NULL ) ;
     this->payload = NULL;
-
+    this->spt_parent = NULL;
     size_t labelsize = strlen(label)+1;
     this->label = (char*)malloc(labelsize*sizeof(char));
     strcpy(this->label, label);

@@ -38,6 +38,7 @@ struct Vertex {
    ListNode* incoming;
    char* label;
    State* payload;
+   Vertex* spt_parent;
 } ;
 
 struct Edge {
@@ -85,11 +86,15 @@ gShortestPathTree( Graph* this, char *from, char *to, State* init_state, WalkOpt
 Graph*
 gShortestPathTreeRetro( Graph* this, char *from, char *to, State* init_state, WalkOptions* options, long mintime );
 
-void
-gShortestPathInPlace( Graph* this, char *from, char *to, State* init_state, WalkOptions* options, long maxtime );
+int
+gSPTInPlace( Graph* this, char *from, char *to, State* init_state, WalkOptions* options, long maxtime );
 
-void
-gShortestPathInPlaceRetro( Graph* this, char *from, char *to, State* init_state, WalkOptions* options, long mintime );
+int
+gSPTInPlaceRetro( Graph* this, char *from, char *to, State* init_state, WalkOptions* options, long mintime );
+
+// call after gSPTnPlace or gSPTInPlaceRetro to get a list of states / route
+State*
+gPathInPlace( Graph* this, char *to );
 
 //direction specifies forward or retro routing
 State*

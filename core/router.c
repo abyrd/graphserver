@@ -132,11 +132,11 @@ gShortestPathTreeRetro( Graph* this, char *from, char *to, State* init_state, Wa
   return spt;
 }
 
-void
+Graph*
 #ifndef RETRO
-gShortestPathInPlace( Graph* this, char *from, char *to, State* init_state, WalkOptions* options, long maxtime ) {
+gSPTInPlace( Graph* this, char *from, char *to, State* init_state, WalkOptions* options, long maxtime ) {
 #else
-gShortestPathInPlaceRetro( Graph* this, char *from, char *to, State* init_state, WalkOptions* options, long mintime ) {
+gSPTInPlaceRetro( Graph* this, char *from, char *to, State* init_state, WalkOptions* options, long mintime ) {
 #endif
     
     // fprintf(stderr, "entered c function\n");
@@ -157,7 +157,7 @@ gShortestPathInPlaceRetro( Graph* this, char *from, char *to, State* init_state,
     // Get origin vertex to make sure it exists
     Vertex* origin_v = gGetVertex( this, origin );
     if( origin_v == NULL ) {
-        return;
+        return NULL;
     }
             
     // Open vertex list, set all payloads to NULL & deallocate them
@@ -171,6 +171,7 @@ gShortestPathInPlaceRetro( Graph* this, char *from, char *to, State* init_state,
             stateDestroy(vtx->payload);
             vtx->payload = NULL;
         }
+        vtx->spt_parent = NULL;
         next_exists = hashtable_iterator_advance( itr );
     }
 
@@ -257,6 +258,8 @@ gShortestPathInPlaceRetro( Graph* this, char *from, char *to, State* init_state,
                     stateDestroy(v->payload);
                 
                 v->payload = new_dv;                    //Set the State of v to the current winner
+                // would be nice to have an edge->payload too 
+                v->spt_parent = u;
             } else {
                 stateDestroy(new_dv);                   //new_dv will never be used; merge it with the infinite.
             }
@@ -265,5 +268,5 @@ gShortestPathInPlaceRetro( Graph* this, char *from, char *to, State* init_state,
     }
     dirfibheap_delete( q );
     // printf("End of c function.");        
-    return;
+    return this;
 }
