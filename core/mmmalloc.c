@@ -27,22 +27,28 @@
 // upper limit of a 32 bit address space
 #define MAX_ADDR (void*) 0xFFFFFFFF
 
-// 256MiB dynamic memory area
-#define ALLOC_SPACE 0x0FFFFFFF
-//   4KiB is the page size
-#define ALLOC_CHUNK 0x0000FFFF
+//  1GiB dynamic memory area
+#define ALLOC_SPACE 0x40000000
+//  4KiB is the page size
+#define ALLOC_PAGE  0x0000FFFF
+// 16MiB expansion chunk size
+#define ALLOC_CHUNK 0x01000000
 
 static void * mmmalloc_base = NULL;
 static void * mmmalloc_top  = NULL;
 static int mmmalloc_fd;
 static int mmmalloc_on = 0;
+static size_t mmmalloc_chunks = 0;
 
 int mmgrab ( ) {
+    // allow only one mmaped graph per session?
+    // block needs structure:
+    // base address, top pointer, a graph struct always at a certain address.
     mmmalloc_fd = open("mmmalloc.mmap", O_CREAT | O_RDWR , 0664);
-    ftruncate( mmmalloc_fd , ALLOC_SPACE );
+    ftruncate( mmmalloc_fd , ALLOC_CHUNK );
+    mmmalloc_chunks = 1;
     mmmalloc_base = mmap( OSX_BASE_BIG, ALLOC_SPACE, PROT_READ | PROT_WRITE, 
-                         MAP_SHARED, mmmalloc_fd, 0);
-    
+                          MAP_SHARED, mmmalloc_fd, 0);
     if ( mmmalloc_base != OSX_BASE_BIG ) { 
         printf( "Unable to obtain requested block.\n"); 
         printf( "I got 0x%08x instead.\n", (uint) mmmalloc_base ); 
@@ -72,10 +78,13 @@ int mmrelease ( ) {
 void * mmmalloc(size_t size) {
     if (mmmalloc_on) {
         if (!mmmalloc_base) mmgrab();
-        printf("mm ");
-        // should be something here to resize the mmap when needed.
-        // or at least check for available space
+        // printf("mm ");
         void * ret = mmmalloc_top;
+        if (mmmalloc_top >= (void *) (mmmalloc_chunks * ALLOC_CHUNK)) {
+            mmmalloc_chunks ++;
+            ftruncate( mmmalloc_fd , ALLOC_CHUNK * mmmalloc_chunks );
+            printf ("\nmmmalloc : expanded to 0x%08x bytes.\n", (uint) mmmalloc_chunks * ALLOC_CHUNK);
+        }
         mmmalloc_top += size;
         // align pointers to avoid errors
         // intel and OSX requires 16 byte alignment
@@ -83,7 +92,7 @@ void * mmmalloc(size_t size) {
         return ret; 
     } else { 
         // mmap is turned off, do a normal malloc
-        printf("sm ");
+        // printf("sm ");
         return malloc( size );
     }
     return NULL;
@@ -91,13 +100,13 @@ void * mmmalloc(size_t size) {
 
 void * mmcalloc(size_t elements, size_t size) {
     if (mmmalloc_on) {
-        printf("mc ");
+        // printf("mc ");
         size_t real_size = elements * size;
         memset(mmmalloc_top, 0, real_size); 
         return mmmalloc( real_size );
     } else { 
         // mmap is turned off, do a normal calloc()
-        printf("sc ");
+        // printf("sc ");
         return calloc( elements, size );
     }
     return NULL;
@@ -106,13 +115,12 @@ void * mmcalloc(size_t elements, size_t size) {
 
 void mmfree(void * p) {
     if (mmmalloc_on) {
-        printf("mf ");
+        // printf("mf ");
         // Graphs are grow-only in memmap mode
         // a lot of freeing goes on when building a graph
-        // printf( "F! " );
     } else {
         // mmap is turned off, do a normal free()
-        printf("sf ");
+        // printf("sf ");
         free( p );
     }
 }
