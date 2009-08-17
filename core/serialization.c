@@ -46,12 +46,12 @@ __buff_size = strlen(buff); \
 LOG("\twm str[%d] @ %d\n", __buff_size, __LINE__); \
 assert(mm_cur_pos %4 == 0);	\
 fwrite(buff,1,__buff_size+1,mmf); \
-fwrite(&padding,1,ftell(mmf)%4,mmf);
+fwrite(&padding,1,(4-ftell(mmf)%4)%4,mmf);
 
 #define MWRITE_TYPE(outvar,type) \
 mm_cur_pos = ftell(mmf); \
 fwrite(&outvar,1,sizeof(type),mmf); \
-fwrite(&padding,1,ftell(mmf)%4,mmf);
+fwrite(&padding,1,(4-ftell(mmf)%4)%4,mmf);
 // \
 //mm_seg_len = mm_seg_len + sizeof(type)
 
