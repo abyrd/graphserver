@@ -13,6 +13,13 @@
 #include "statetypes.h"
 #include "graph.h"
 
+#define WRITE_BUFFER_LENGTH 1024
+#define LABEL_BUFFER_LENGTH 512
+#define FNAME_BUFFER_LENGTH 1024
+// 100MB
+#define MAX_MMAP_SIZE       100*1024*1024
+#define MAX_CALENDARS       32
+
 /* The following hack allows for development debugging of the serialization code */
 #if 0
   #define LOG(...) printf(__VA_ARGS__);
@@ -86,10 +93,10 @@ bool gDeserialize(Graph *g, char* gbin_name, char * mmf_name) {
 	void * mm_data = NULL;
 	uint32_t endian_sig;
 	uint8_t  type_size;
-	char f_ind_name[1024];
+	char f_ind_name[FNAME_BUFFER_LENGTH];
 	long num_vertices, num_edges, num_calendars, num_timezones;
-	STRING_BUFF(label,256);
-	STRING_BUFF(label2,256);
+	STRING_BUFF(label,  LABEL_BUFFER_LENGTH);
+	STRING_BUFF(label2, LABEL_BUFFER_LENGTH);
 	
 	int ep_type;
 	long i;
@@ -117,8 +124,7 @@ bool gDeserialize(Graph *g, char* gbin_name, char * mmf_name) {
 	} else {
 	   LOG("deserializing memory mapped graph\n");
 	   //okay they want to memory map. Lets do it.
-	   //current hardcoded max of 100 mb mmaped file.
-	   mm_data = mmap((caddr_t)0, 100*1024*1024, PROT_READ, MAP_SHARED, fileno(mmf), (off_t)0);
+	   mm_data = mmap((caddr_t)0, MAX_MMAP_SIZE, PROT_READ, MAP_SHARED, fileno(mmf), (off_t)0);
 	   assert(mm_data != (void *)-1);
 	}
 	
@@ -222,11 +228,11 @@ bool gDeserialize(Graph *g, char* gbin_name, char * mmf_name) {
 
 bool gSerialize(Graph *g, char* gbin_name, char * mmf_name) {
 	FILE *f, *mmf;
-	char f_ind_name[1024];
+	char f_ind_name[FNAME_BUFFER_LENGTH];
 	long num_vertices, num_edges;
 	int num_calendars, num_timezones;
-	ServiceCalendar* calendars[32];
-	Timezone* timezones[32];
+	ServiceCalendar* calendars[MAX_CALENDARS];
+	Timezone* timezones[MAX_CALENDARS];
 	BUFF_SIZE;
 	long i, j;
 	Vertex** verts;
@@ -276,7 +282,7 @@ bool gSerialize(Graph *g, char* gbin_name, char * mmf_name) {
 		ListNode* out; 
 		int v_num_edges = 0;
 		Vertex* v = verts[i];
-		FWRITE_STRING(v->label, 256);
+		FWRITE_STRING(v->label, LABEL_BUFFER_LENGTH);
 		out = vGetOutgoingEdgeList(v);
 		while (out) { //out is a ListNode (linked list), set to next on each iteration.
 			num_edges++;
@@ -375,8 +381,8 @@ bool gSerialize(Graph *g, char* gbin_name, char * mmf_name) {
 				FWRITE_TYPE(flag,bool);
 			}
 			// write the from/to labels
-			FWRITE_STRING(v->label, 64);
-			FWRITE_STRING(out->data->to->label, 64);	
+			FWRITE_STRING(v->label, LABEL_BUFFER_LENGTH);
+			FWRITE_STRING(out->data->to->label, LABEL_BUFFER_LENGTH);	
 			switch (p->type) {
 				case PL_STREET: __SERIALIZE(street, Street*, p); break;
 				case PL_LINK:  __SERIALIZE(link, Link*, p); break;
@@ -432,7 +438,7 @@ EdgePayload*
 streetDeserialize(FILE* f, void* mm_data) {
 	// "h(s)f"
 	double s_len;
-	STRING_BUFF(name, 1024);
+	STRING_BUFF(name, WRITE_BUFFER_LENGTH);
 	FREAD_STRING(name);
 	FREAD_TYPE(s_len, double);
 	return (EdgePayload*)streetNew(name, s_len);
@@ -442,7 +448,7 @@ void
 streetSerialize(Street* s, FILE* f, FILE* mmf) {
 	// "h(s)f"
 	BUFF_SIZE;
-	FWRITE_STRING(s->name, 1024);
+	FWRITE_STRING(s->name, WRITE_BUFFER_LENGTH);
 	FWRITE_TYPE(s->length, double);
 }
 
@@ -450,7 +456,7 @@ void test_serialize(char* filename) {
 	BUFF_SIZE;
 	FILE* f;
 	Street* s;
-	STRING_BUFF(buff, 1024);
+	STRING_BUFF(buff, WRITE_BUFFER_LENGTH);
 	long l = 1000000L;
 	f = fopen(filename, "wb");
 	FWRITE_STRING("cows on the loose", 32);
@@ -559,7 +565,7 @@ alSerialize(Alight* a, FILE* f, FILE * mmf) {
 	} else {
         int i;
         for (i = 0; i < trip_cnt; i++) {
-            FWRITE_STRING(a->trip_ids[i],512);
+            FWRITE_STRING(a->trip_ids[i], LABEL_BUFFER_LENGTH);
             FWRITE_TYPE(a->arrivals[i],int);
         }
 	}
@@ -598,7 +604,7 @@ alDeserialize(ServiceCalendar* calendar, Timezone* timezone, FILE* f, void* mm_d
         ServiceId sid;
 	    int trip_cnt, agency, arrival;
 	
-        STRING_BUFF(trip_id, 512);
+        STRING_BUFF(trip_id, LABEL_BUFFER_LENGTH);
     
         FREAD_TYPE(sid, ServiceId);
         FREAD_TYPE(trip_cnt, int);
@@ -645,7 +651,7 @@ tbSerialize(TripBoard* tb, FILE* f, FILE * mmf) {
 	} else {
         int i;
         for (i = 0; i < trip_cnt; i++) {
-            FWRITE_STRING(tb->trip_ids[i],512);
+            FWRITE_STRING(tb->trip_ids[i], LABEL_BUFFER_LENGTH);
             FWRITE_TYPE(tb->departs[i],int);
         }
 	}
@@ -686,7 +692,7 @@ tbDeserialize(ServiceCalendar* calendar, Timezone* timezone, FILE* f, void* mm_d
         ServiceId sid;
 	    int trip_cnt, agency, departure;
 		
-        STRING_BUFF(trip_id, 512);
+        STRING_BUFF(trip_id, LABEL_BUFFER_LENGTH);
 		
         FREAD_TYPE(sid, ServiceId);
         FREAD_TYPE(trip_cnt, int);
@@ -710,7 +716,7 @@ hwbSerialize(HeadwayBoard* o, FILE* f, FILE * mmf) {
 	BUFF_SIZE;	
 	FWRITE_TYPE(o->service_id,ServiceId);
 	FWRITE_TYPE(o->agency, int);
-	FWRITE_STRING(o->trip_id,512);
+	FWRITE_STRING(o->trip_id, LABEL_BUFFER_LENGTH);
 	FWRITE_TYPE(o->start_time, int);
 	FWRITE_TYPE(o->end_time, int);
 	FWRITE_TYPE(o->headway_secs, int);
@@ -721,7 +727,7 @@ hwbDeserialize(ServiceCalendar* calendar, Timezone* timezone, FILE* f, void* mm_
 	ServiceId service_id;
 	int agency, start_time, end_time, headway_secs;
 	
-	STRING_BUFF(trip_id,512);
+	STRING_BUFF(trip_id, LABEL_BUFFER_LENGTH);
 	
 	FREAD_TYPE(service_id, ServiceId);
 	FREAD_TYPE(agency, int);
@@ -738,7 +744,7 @@ hwaSerialize(HeadwayAlight* o, FILE* f, FILE* mmf) {
 	BUFF_SIZE;	
 	FWRITE_TYPE(o->service_id,ServiceId);
 	FWRITE_TYPE(o->agency, int);
-	FWRITE_STRING(o->trip_id,512);
+	FWRITE_STRING(o->trip_id, LABEL_BUFFER_LENGTH);
 	FWRITE_TYPE(o->start_time, int);
 	FWRITE_TYPE(o->end_time, int);
 	FWRITE_TYPE(o->headway_secs, int);
@@ -749,7 +755,7 @@ hwaDeserialize(ServiceCalendar* calendar, Timezone* timezone, FILE* f, void* mm_
 	ServiceId service_id;
 	int agency, start_time, end_time, headway_secs;
 	
-	STRING_BUFF(trip_id,512);
+	STRING_BUFF(trip_id, LABEL_BUFFER_LENGTH);
 	
 	FREAD_TYPE(service_id, ServiceId);
 	FREAD_TYPE(agency, int);
@@ -781,7 +787,7 @@ void scSerialize(ServiceCalendar * sc, FILE * f, FILE* mmf) {
 	FWRITE_TYPE(num_sps, int); //write the number of service calendars
     
     for (i = 0; i < num_sids; i++){
-		FWRITE_STRING(sc->sid_int_to_str[i],1024);
+		FWRITE_STRING(sc->sid_int_to_str[i], WRITE_BUFFER_LENGTH);
         LOG("sid_name %s\n", sc->sid_int_to_str[i]);
 
 		//write the service id name
@@ -803,7 +809,7 @@ void scSerialize(ServiceCalendar * sc, FILE * f, FILE* mmf) {
 ServiceCalendar*
 scDeserialize(FILE* f, void* mm_data) {
 	int i, j, num_sps, num_sids;
-	STRING_BUFF(sid_name, 1024);
+	STRING_BUFF(sid_name, WRITE_BUFFER_LENGTH);
 	ServicePeriod *p;
 	ServicePeriod pt;
 	ServiceCalendar* sc;
