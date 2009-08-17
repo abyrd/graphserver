@@ -1,4 +1,20 @@
-#! python
+# Python script
+#
+# Test serialization code
+#
+# 2009 AUG 17 : Created (Andrew Byrd)
+#
+# opens a graphserver database, writes it out as a gs binary file, then reads it into another graph
+# tests that the two have identical structure and contents
+# runs random path searches and checks that the results are the same
+#
+# any reasonably complex graph will yield different path trees when serialized
+# this is because there are multiple paths which give the same times at all vertices
+# and when you rearrange the graph's objects it finds different paths
+#
+# the discrepancies are harmless, as they are equally good paths.
+# this test tries to distinguish between real errors and harmless differences.
+
 from graphserver.core import Graph, State, Street
 from graphserver.graphdb import GraphDatabase
 import random
