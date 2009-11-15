@@ -252,7 +252,12 @@ class GTFSDatabase:
             d.execute( "SELECT trip_id, arrival_time, departure_time, stop_id FROM stop_times WHERE trip_id=? ORDER BY stop_sequence", (trip_id,) )
             
             stop_times = list(d)
-            
+
+            # throw away everything except morning rush hour
+            first_departure = stop_times[ 0][2]
+            last_arrival    = stop_times[-1][1]
+            if last_arrival < 7 * 3600 or first_departure > 9*3600 : continue
+
             stop_ids = [stop_id for trip_id, arrival_time, departure_time, stop_id in stop_times]
             layovers = [departure_time-arrival_time for trip_id, arrival_time, departure_time, stop_id in stop_times]
             crossings = [arrival_time2 - departure_time1 for (trip_id1, arrival_time1, departure_time1, stop_id1),

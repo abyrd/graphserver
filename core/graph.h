@@ -86,10 +86,10 @@ gShortestPathTree( Graph* this, char *from, char *to, State* init_state, WalkOpt
 Graph*
 gShortestPathTreeRetro( Graph* this, char *from, char *to, State* init_state, WalkOptions* options, long mintime );
 
-int
+Graph*
 gSPTInPlace( Graph* this, char *from, char *to, State* init_state, WalkOptions* options, long maxtime );
 
-int
+Graph*
 gSPTInPlaceRetro( Graph* this, char *from, char *to, State* init_state, WalkOptions* options, long mintime );
 
 // call after gSPTnPlace or gSPTInPlaceRetro to get a list of states / route
