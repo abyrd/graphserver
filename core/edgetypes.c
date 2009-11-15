@@ -126,6 +126,7 @@ stateNew(int n_agencies, long time) {
   ret->prev_edge = NULL;
   ret->n_agencies = n_agencies;
   ret->service_periods = (ServicePeriod**)malloc(n_agencies*sizeof(ServicePeriod*)); //hash of strings->calendardays
+  ret->initial_wait = 0;
 
   int i;
   for(i=0; i<n_agencies; i++) {
@@ -170,6 +171,9 @@ stateGetPrevEdge( State* this ) { return this->prev_edge; }
 
 char*
 stateGetTripId( State* this ) { return this->trip_id; }
+
+int
+stateGetInitialWait( State* this ) { return this->initial_wait; }
 
 int
 stateGetNumAgencies( State* this ) { return this->n_agencies; }
@@ -768,6 +772,7 @@ tbWalk( EdgePayload* superthis, State* params, WalkOptions* options ) {
     ret->time   += wait;
     ret->weight += wait + 1; //base transfer penalty
     ret->weight += options->transfer_penalty;
+    if (params->initial_wait == 0) ret->initial_wait = wait;
     
     ret->trip_id = this->trip_ids[next_boarding_index];
     
@@ -919,6 +924,7 @@ hbWalk( EdgePayload* superthis, State* params, WalkOptions* options ) {
     ret->time   += wait;
     ret->weight += wait + 1; //transfer penalty
     ret->weight += options->transfer_penalty;
+    if (params->initial_wait == 0) ret->initial_wait = wait;
     
     ret->trip_id = this->trip_id;
     
@@ -944,6 +950,7 @@ hbWalkBack(EdgePayload* superthis, State* params, WalkOptions* options) {
     ret->time   -= wait;
     ret->weight += wait; //transfer penalty
     ret->trip_id = NULL;
+    if (params->initial_wait == 0) ret->initial_wait = wait;
     
     return ret;
 }
@@ -1083,6 +1090,7 @@ haWalkBack( EdgePayload* superthis, State* params, WalkOptions* options ) {
     ret->time   -= wait;
     ret->weight += wait + 1; //transfer penalty
     ret->weight += options->transfer_penalty;
+    if (params->initial_wait == 0) ret->initial_wait = wait;
     
     ret->trip_id = this->trip_id;
     
@@ -1400,6 +1408,7 @@ alWalkBack( EdgePayload* superthis, State* params, WalkOptions* options ) {
     ret->time   -= wait;
     ret->weight += wait + 1; //transfer penalty
     ret->weight += options->transfer_penalty;
+    if (params->initial_wait == 0) ret->initial_wait = wait;
     
     ret->trip_id = this->trip_ids[last_alighting_index];
     
