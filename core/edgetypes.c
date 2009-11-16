@@ -770,9 +770,10 @@ tbWalk( EdgePayload* superthis, State* params, WalkOptions* options ) {
     int wait = (next_boarding_time - time_since_midnight);
     
     ret->time   += wait;
-    ret->weight += wait + 1; //base transfer penalty
+    ret->weight += 1; //base transfer penalty
     ret->weight += options->transfer_penalty;
     if (params->initial_wait == 0) ret->initial_wait = wait;
+    else ret->weight += wait;
     
     ret->trip_id = this->trip_ids[next_boarding_index];
     
@@ -922,10 +923,11 @@ hbWalk( EdgePayload* superthis, State* params, WalkOptions* options ) {
         wait += (this->start_time - time_since_midnight);
     
     ret->time   += wait;
-    ret->weight += wait + 1; //transfer penalty
+    ret->weight += 1; //transfer penalty
     ret->weight += options->transfer_penalty;
     if (params->initial_wait == 0) ret->initial_wait = wait;
-    
+    else ret->weight += wait;
+
     ret->trip_id = this->trip_id;
     
     // Make sure the service period caches are updated if we've traveled over a service period boundary
@@ -948,9 +950,9 @@ hbWalkBack(EdgePayload* superthis, State* params, WalkOptions* options) {
     
     int wait = this->headway_secs; 
     ret->time   -= wait;
-    ret->weight += wait; //transfer penalty
     ret->trip_id = NULL;
     if (params->initial_wait == 0) ret->initial_wait = wait;
+    else ret->weight += wait;
     
     return ret;
 }
@@ -1088,9 +1090,10 @@ haWalkBack( EdgePayload* superthis, State* params, WalkOptions* options ) {
         wait += (time_since_midnight - this->end_time);
     
     ret->time   -= wait;
-    ret->weight += wait + 1; //transfer penalty
+    ret->weight += 1; //transfer penalty
     ret->weight += options->transfer_penalty;
     if (params->initial_wait == 0) ret->initial_wait = wait;
+    else ret->weight += wait;
     
     ret->trip_id = this->trip_id;
     
@@ -1406,10 +1409,11 @@ alWalkBack( EdgePayload* superthis, State* params, WalkOptions* options ) {
     int wait = (time_since_midnight - last_alighting_time);
     
     ret->time   -= wait;
-    ret->weight += wait + 1; //transfer penalty
+    ret->weight += 1; //transfer penalty
     ret->weight += options->transfer_penalty;
     if (params->initial_wait == 0) ret->initial_wait = wait;
-    
+    else ret->weight += wait;
+
     ret->trip_id = this->trip_ids[last_alighting_index];
     
     // Make sure the service period caches are updated if we've traveled over a service period boundary

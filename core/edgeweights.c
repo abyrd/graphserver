@@ -76,9 +76,9 @@ waitWalk(EdgePayload* superthis, State* params, WalkOptions* options) {
     }
     
     ret->time += wait_time;
-    ret->weight += wait_time;
     if (params->initial_wait == 0) ret->initial_wait = wait_time;
-    
+    else ret->weight += wait_time;
+
     return ret;
 }
 #else
@@ -97,9 +97,9 @@ waitWalkBack(EdgePayload* superthis, State* params, WalkOptions* options) {
     }
     
     ret->time -= wait_time;
-    ret->weight += wait_time;
     if (params->initial_wait == 0) ret->initial_wait = wait_time;
-    
+    else ret->weight += wait_time;
+
     return ret;
 }
 #endif
@@ -247,9 +247,10 @@ headwayWalkBack(EdgePayload* superthis, State* params, WalkOptions* options) {
     }
     
     ret->time   += wait + this->transit;
-    ret->weight += wait + this->transit + transfer_penalty;
+    ret->weight += this->transit + transfer_penalty;
     if (params->initial_wait == 0) ret->initial_wait = wait;
-    
+    else ret->weight += wait;
+
     for(i=0; i<params->n_agencies; i++) {
         if( ret->service_periods[i] && ret->time >= ret->service_periods[i]->end_time) {
           ret->service_periods[i] = ret->service_periods[i]->next_period;
@@ -271,9 +272,10 @@ headwayWalkBack(EdgePayload* superthis, State* params, WalkOptions* options) {
     }
     
     ret->time   -= wait + this->transit;
-    ret->weight += wait + this->transit + transfer_penalty;
+    ret->weight += this->transit + transfer_penalty;
     if (params->initial_wait == 0) ret->initial_wait = wait;
-    
+    else ret->weight += wait;
+
     for(i=0; i<params->n_agencies; i++) {
         if( ret->service_periods[i] && ret->time < ret->service_periods[i]->begin_time) {
           ret->service_periods[i] = ret->service_periods[i]->prev_period;
