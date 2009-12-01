@@ -33,24 +33,33 @@ gShortestPathTreeRetro( Graph* this, char *from, char *to, State* init_state, Wa
   Graph* spt = gNew();
   gAddVertex( spt, origin )->payload = init_state;
   //Priority Queue
-  dirfibheap_t q = dirfibheap_new( gSize( this ) );
-  dirfibheap_insert_or_dec_key( q, gGetVertex( this, origin ), 0 );
+  dirfibheap_t q_weight = dirfibheap_new( gSize( this ) );
+  dirfibheap_insert_or_dec_key( q_weight, gGetVertex( this, origin ), 0 );
+  // Another queue for best-time states
+  dirfibheap_t q_time = dirfibheap_new( gSize( this ) );
+  dirfibheap_t q_curr = NULL;
 
 /*
  *  CENTRAL ITERATION
  *
  */
 
-  while( !dirfibheap_empty( q ) ) {                  //Until the priority queue is empty:
-    u = dirfibheap_extract_min( q );                 //get the lowest-weight Vertex 'u',
+  while( 1 ) {                                
+     if      ( !dirfibheap_empty( q_weight ) ) q_curr = q_weight;
+     else if ( !dirfibheap_empty( q_time   ) ) q_curr = q_time;
+     else break;  // all queues are empty - terminate.
 
-    if( !strcmp( u->label, target ) )                //(end search if reached destination vertex)
-      break;
+     u = dirfibheap_extract_min( q_curr );            //get the lowest-weight Vertex 'u',
+     spt_u = gGetVertex( spt, u->label );             //get corresponding SPT Vertex,  
+     if      ( q_curr == q_weight ) du = (State*)spt_u->payload;                     //and get State of u 'du'.
+     else if ( q_curr == q_time )   du = (State*)spt_u->payload_time;                //and get State of u 'du'.
 
-    spt_u = gGetVertex( spt, u->label );             //get corresponding SPT Vertex,
-    
-    du = (State*)spt_u->payload;                     //and get State of u 'du'.
-    
+
+//    if( !strcmp( u->label, target ) )                //(end search if reached destination vertex)
+//     break;                                           // let's not worry about termination for now.
+
+
+// add more termination conditions
 #ifndef RETRO
     if( du->time > maxtime )
       break;
@@ -73,12 +82,15 @@ gShortestPathTreeRetro( Graph* this, char *from, char *to, State* init_state, Wa
 #endif
 
       long old_w;
+      long old_t;
       if( (spt_v = gGetVertex( spt, v->label )) ) {        //get the SPT Vertex corresponding to 'v'
         dv = (State*)spt_v->payload;                     //and its State 'dv'
         old_w = dv->weight;
+        old_t = dv->time;
       } else {
         dv = NULL;                                       //which may not exist yet
         old_w = INFINITY;
+        old_t = INFINITY;
       }
 
 #ifndef RETRO
@@ -100,10 +112,14 @@ gShortestPathTreeRetro( Graph* this, char *from, char *to, State* init_state, Wa
         continue;
       }
 
+      // should really be done selectively
+      // need separate state objects to avoid needing reference counts
+      State *new_dv_time = stateDup( new_dv );
+
       long new_w = new_dv->weight;
       // If the new way of getting there is better,
       if( new_w < old_w ) {
-        dirfibheap_insert_or_dec_key( q, v, new_w );    // rekey v in the priority queue
+        dirfibheap_insert_or_dec_key( q_weight, v, new_w );    // rekey v in the priority queue
 
         // If this is the first time v has been reached
         if( !spt_v ) {
@@ -118,15 +134,31 @@ gShortestPathTreeRetro( Graph* this, char *from, char *to, State* init_state, Wa
             stateDestroy(spt_v->payload);
         spt_v->payload = new_dv;                      //Set the State of v in the SPT to the current winner
 
+        // only weight path is recorded... this does not really work.
         vSetParent( spt_v, spt_u, edge->payload );      //Make u the parent of v in the SPT
       } else {
         stateDestroy(new_dv); //new_dv will never be used; merge it with the infinite.
       }
+      
+      long new_t = new_dv->time;
+      // If the new way of getting there is FASTER
+      if( new_t < old_t ) {
+        dirfibheap_insert_or_dec_key( q_time, v, new_t );    // rekey v in the times priority queue
+
+        if(spt_v->payload_time)
+            stateDestroy(spt_v->payload_time);
+        spt_v->payload_time = new_dv_time;               //Set the State of v (best time) in the SPT to the current winner
+
+      } else {
+        stateDestroy(new_dv_time); //new_dv_time will never be used; merge it with the infinite.
+      }
+
       edges = edges->next;
     }
   }
 
   dirfibheap_delete( q );
+  dirfibheap_delete( q_time );
 
   //fprintf(stdout, "Final shortest path tree size: %d\n",count);
   return spt;

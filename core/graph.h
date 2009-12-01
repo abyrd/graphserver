@@ -38,6 +38,7 @@ struct Vertex {
    ListNode* incoming;
    char* label;
    State* payload;
+   State* payload_time;
 } ;
 
 struct Edge {
