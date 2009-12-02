@@ -303,6 +303,9 @@ vDestroy(Vertex *this, int free_vertex_payload, int free_edge_payloads) {
     if( free_vertex_payload && this->payload )
       stateDestroy( this->payload );
 
+    if( free_vertex_payload && this->payload_time )
+      stateDestroy( this->payload_time );
+
     //delete incoming edges
     while(this->incoming->next != NULL) {
       eDestroy( this->incoming->next->data, free_edge_payloads );
