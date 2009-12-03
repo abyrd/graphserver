@@ -23,8 +23,10 @@ gShortestPathTreeRetro( Graph* this, char *from, char *to, State* init_state, Wa
   char* target = from;
 #endif
 
-  // the departure time
-  long t0 = init_state->time;
+  // search cutoffs
+  long time_cutoff = init_state->time + 60 * 60 * 4;
+  int  walk_cutoff = 1600;
+  int  transfer_cutoff = 3;   
 
   //Get origin vertex to make sure it exists
   Vertex* origin_v = gGetVertex( this, origin );
@@ -67,13 +69,14 @@ gShortestPathTreeRetro( Graph* this, char *from, char *to, State* init_state, Wa
 //    if( !strcmp( u->label, target ) )                //(end search if reached destination vertex)
 //     break;                                          // let's not worry about termination for now.
 
-// add more termination conditions
+// do not continue expanding a path if it is unreasonably long
 #ifndef RETRO
-//    if( du->time > maxtime )
-//      break;
+      if( du->time > time_cutoff || du->dist_walked > walk_cutoff || du->num_transfers > transfer_cutoff )
+         continue;
 #else
-//    if( du->time < mintime )
-//      break;
+// this is wrong.
+      if( du->time < time_cutoff || du->dist_walked > walk_cutoff || du->num_transfers > transfer_cutoff )
+         continue;
 #endif
 
 #ifndef RETRO
