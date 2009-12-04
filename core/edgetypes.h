@@ -94,6 +94,7 @@ typedef struct State {
    char*         trip_id;
    int           n_agencies;
    ServicePeriod** service_periods;
+   int           initial_wait;
 } State;
 
 State*
