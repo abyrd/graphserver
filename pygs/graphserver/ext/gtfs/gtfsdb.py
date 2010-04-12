@@ -333,14 +333,18 @@ class GTFSDatabase:
     def continuing_trips(self) :
         c = self.get_cursor()
         try :
-            c.execute( "SELECT t.service_id, t.block_id, t.trip_id, min(s.arrival_time) AS arv, max(s.departure_time) AS dep FROM trips AS t, stop_times AS s WHERE s.trip_id = t.trip_id and t.block_id is not null GROUP BY t.trip_id ORDER BY t.service_id, t.block_id, arv" )
+            c.execute( "SELECT t.service_id, t.block_id, t.trip_id, min(s.arrival_time) AS begin_time, max(s.departure_time) AS end_time FROM trips AS t, stop_times AS s WHERE s.trip_id = t.trip_id and t.block_id is not null GROUP BY t.trip_id ORDER BY t.service_id, t.block_id, begin_time" )
+            # verify semantics of arrival and departure times above
             result = {}
             old_row = c.next()
             for row in c :
                 if row[:2] == old_row[:2] : # if we are still on the same vehicle
                     wait_time = row[3] - old_row[4]
-                    if wait_time < 0 : print 'ERROR IN GTFS FEED: Wait time between two trips for one vehicle is negative.'
-                    result[old_row[2]] = (row[2], wait_time) # record trip transition
+                    if wait_time < 0 : 
+                        # this should probably raise an error
+                        print 'ERROR IN GTFS FEED: %d sec overlap on routes %s -> %s. Ignoring trip transition.' % (-wait_time, old_row[2], row[2])
+                    else :
+                        result[old_row[2]] = (row[2], wait_time) # record trip transition
                 old_row = row
             return result
         except :
