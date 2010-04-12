@@ -136,7 +136,11 @@ class RouteServer(Servable):
         spt = self.graph.shortest_path_tree( origin, dest, State(1,currtime), wo )
         
         
-        vertices, edges = spt.path( dest )
+        # begin kludge to convert between path formats
+        edges, vertices, states = zip(*spt.get_vertex(dest).best_state.path)
+        vertices = list(vertices)
+        edges = list(edges)[1:] + [None]
+        # end kludge
         performance['path_query_time'] = time.time()-t0
         
         t0 = time.time()
