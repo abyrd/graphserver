@@ -110,7 +110,7 @@ def gdb_boardalight_load_bundle(gdb, agency_namespace, bundle, service_id, sc, t
                       crossing, 
                       cursor )
                       
-    gdb.commit()
+    #gdb.commit()
 
     # record each trip's first and last pattern vertex in dictionaries
     for e in stop_time_bundles[0]:
@@ -155,6 +155,7 @@ def gdb_load_gtfsdb_to_boardalight(gdb, agency_namespace, gtfsdb, cursor, agency
         
         for service_id in [x.encode("ascii") for x in gtfsdb.service_ids()]:
             gdb_boardalight_load_bundle(gdb, agency_namespace, bundle, service_id, sc, gs_tz, cursor, trip_first_pvertex, trip_last_pvertex)
+    gdb.commit()
 
     # connect sequential trips that use that same vehicle
     if reporter: reporter.write( "Analyzing trip blocks...\n" )
