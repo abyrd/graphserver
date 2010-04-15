@@ -109,7 +109,7 @@ class OSMDB:
         
     def setup(self):
         c = self.get_cursor()
-        c.execute( "CREATE TABLE nodes (id TEXT, tags TEXT, lat FLOAT, lon FLOAT, endnode_refs INTEGER DEFAULT 1)" )
+        c.execute( "CREATE TABLE nodes (id TEXT, tags TEXT, lat FLOAT, lon FLOAT, endnode_refs INTEGER DEFAULT 1, vertex TEXT)" )
         c.execute( "CREATE TABLE ways (id TEXT, tags TEXT, nds TEXT)" )
         self.conn.commit()
         c.close()
@@ -488,13 +488,36 @@ class OSMDB:
         # instead of initializing all the reference systems, add only WGS84 lat-lon
         c.execute("INSERT INTO spatial_ref_sys (srid, auth_name, auth_srid, ref_sys_name, proj4text) VALUES (4326, 'epsg', 4326, 'WGS 84', '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs')")
         # For nodes, add a 2D point column in WGS84 lat-lon reference system
-        if reporter: reporter.write("Making node table geometry column... ")
+        if reporter: reporter.write("Making node table geometry column...\n")
         c.execute("SELECT AddGeometryColumn ( 'nodes', 'GEOMETRY', 4326, 'POINT', 2 )")
-        c.execute("SELECT CreateSpatialIndex( 'nodes', 'GEOMETRY' )")
-        c.execute("UPDATE nodes SET GEOMETRY = MakePoint( lon, lat, 4326 )")
+        #c.execute("SELECT CreateSpatialIndex( 'nodes', 'GEOMETRY' )")
+        #c.execute("UPDATE nodes SET GEOMETRY = MakePoint( lon, lat, 4326 )")
         c.commit()
-        if reporter: reporter.write("done.\n")
+        if reporter: 
+            reporter.write("done.\n")
+            reporter.flush()
 
+    def make_vertices(self, reporter=None):
+        if reporter: reporter.write("Fusing OSM nodes into vertices...\n")
+        c = self.conn
+        c.execute("CREATE TABLE vertices (id TEXT, endnode_refs INTEGER DEFAULT 1)")
+        c.execute("SELECT AddGeometryColumn ( 'vertices', 'GEOMETRY', 4326, 'POINT', 2 )")
+        c.execute("SELECT CreateSpatialIndex( 'vertices', 'GEOMETRY' )")
+        c.commit()
+        # StitchDisjunctGraphsFilter gives some good syntax hints.        
+        # Could this somehow all be one query instead of python loops?        
+        # this is slow, it's much easier to just deal with the duplicates.
+        # i.e. copy nodes and ways to vertices and edges, then only manipulate V+E tables
+        # for copying do something like: 
+        #   spatialite> insert into vert (id, GEOM, refcount) 
+        #               select id, MakePoint(lon, lat, SRS), 0 from nodes;
+        for nds, ct, lat, lon in c.execute("SELECT group_concat(id), count(*) as cnt, round(lat, 5) as rlat, round(lon, 5) as rlon from nodes GROUP BY rlat, rlon"):
+            first_node = "osm-" + nds.split(",")[0]
+            c.execute("UPDATE nodes SET vertex = ? WHERE id IN (?)", (first_node, nds))
+            c.execute("INSERT INTO vertices (id, GEOMETRY) VALUES (?, MakePoint(?, ?, 4326))", (first_node, lon, lat))
+            if ct > 1:
+                if reporter: reporter.write("Added vertex %s for %s.\n" % (first_node, nds))
+        c.commit()
 
 def test_wayrecord():
     wr = WayRecord( "1", {'highway':'bumpkis'}, ['1','2','3'] )
@@ -511,7 +534,8 @@ def osm_to_osmdb(osm_filename, osmdb_filename, tolerant=False):
     osmdb = OSMDB( osmdb_filename, overwrite=True )
     osmdb.populate( osm_filename, accept=lambda tags: 'highway' in tags, reporter=sys.stdout )
     osmdb.make_geometry(reporter=sys.stdout)
-    osmdb.create_and_populate_edges_table(tolerant)
+    osmdb.make_vertices(reporter=sys.stdout)
+    # osmdb.create_and_populate_edges_table(tolerant)
 
 def main():
     from sys import argv
