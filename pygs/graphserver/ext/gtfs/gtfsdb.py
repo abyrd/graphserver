@@ -1,5 +1,8 @@
 import csv
-import sqlite3
+# following import is a bit ugly but allows minimum code changes 
+# in Python 2.7 this should work without a rebuilt pysqlite
+# i.e. python's built-in psqlite (called sqlite3) should have enable_load_extension
+from pysqlite2 import dbapi2 as sqlite3
 import sys
 import os
 from zipfile import ZipFile
@@ -213,9 +216,9 @@ class GTFSDatabase:
                 os.remove(sqlite_filename)
             except:
                 pass
-        
+               
         self.conn = sqlite3.connect( sqlite_filename )
-        
+
     def get_cursor(self):
         # Attempts to get a cursor using the current connection to the db. If we've found ourselves in a different thread
         # than that which the connection was made in, re-make the connection.
@@ -499,6 +502,25 @@ class GTFSDatabase:
                 
         return ret
                 
+    def make_geometry(self, reporter = None):
+        c = self.conn
+        c.enable_load_extension(True)
+        try :
+            c.execute("SELECT load_extension('libspatialite.so.2')")
+            c.execute("SELECT InitSpatialMetaData()")
+        except :
+            if reporter: reporter.write("Cannot make geometry columns. You need libspatialite.so.2, and pysqlite must be compiled with enable_load_extension.\n")
+            return
+        # instead of initializing all the reference systems, add only WGS84 lat-lon
+        if reporter: reporter.write("Initializing spatial database tables...\n")
+        c.execute("INSERT INTO spatial_ref_sys (srid, auth_name, auth_srid, ref_sys_name, proj4text) VALUES (4326, 'epsg', 4326, 'WGS 84', '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs')")
+        # For stops, add a 2D point column in WGS84 lat-lon reference system
+        if reporter: reporter.write("Making stop geometry...\n")
+        c.execute("SELECT AddGeometryColumn ( 'stops', 'GEOMETRY', 4326, 'POINT', 2 )")
+        c.execute("SELECT CreateSpatialIndex( 'stops', 'GEOMETRY' )")
+        c.execute("UPDATE stops SET GEOMETRY = MakePoint( stop_lon, stop_lat, 4326 )")
+        c.commit()
+
 
 def main_inspect_gtfsdb():
     from sys import argv
@@ -546,6 +568,6 @@ def main_build_gtfsdb():
  
     gtfsdb = GTFSDatabase( gtfsdb_filename, overwrite=True )
     gtfsdb.load_gtfs( gtfs_filename, reporter=sys.stdout )
-
+    gtfsdb.make_geometry(reporter=sys.stdout)
 
 if __name__=='__main__': main_inspect_gtfsdb()
