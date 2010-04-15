@@ -1,4 +1,7 @@
-import sqlite3
+# ugly import statement allows minimum changes
+# when python's built-in pysqlite allows loading extensions
+# (should be in python version 2.7)
+from pysqlite2 import dbapi2 as sqlite3
 import os
 try:
     import json
@@ -472,6 +475,27 @@ class OSMDB:
     def cursor(self):
         return self.get_cursor()    
 
+    def make_geometry(self, reporter = None):
+        c = self.conn
+        if reporter: reporter.write("Initializing spatial database tables...\n")
+        c.enable_load_extension(True)
+        try :
+            c.execute("SELECT load_extension('libspatialite.so.2')")
+            c.execute("SELECT InitSpatialMetaData()")
+        except :
+            if reporter: reporter.write("Cannot make geometry columns. You need libspatialite.so.2, and pysqlite must be compiled with enable_load_extension.\n")
+            return
+        # instead of initializing all the reference systems, add only WGS84 lat-lon
+        c.execute("INSERT INTO spatial_ref_sys (srid, auth_name, auth_srid, ref_sys_name, proj4text) VALUES (4326, 'epsg', 4326, 'WGS 84', '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs')")
+        # For nodes, add a 2D point column in WGS84 lat-lon reference system
+        if reporter: reporter.write("Making node table geometry column... ")
+        c.execute("SELECT AddGeometryColumn ( 'nodes', 'GEOMETRY', 4326, 'POINT', 2 )")
+        c.execute("SELECT CreateSpatialIndex( 'nodes', 'GEOMETRY' )")
+        c.execute("UPDATE nodes SET GEOMETRY = MakePoint( lon, lat, 4326 )")
+        c.commit()
+        if reporter: reporter.write("done.\n")
+
+
 def test_wayrecord():
     wr = WayRecord( "1", {'highway':'bumpkis'}, ['1','2','3'] )
     assert wr.id == "1"
@@ -486,6 +510,7 @@ def test_wayrecord():
 def osm_to_osmdb(osm_filename, osmdb_filename, tolerant=False):
     osmdb = OSMDB( osmdb_filename, overwrite=True )
     osmdb.populate( osm_filename, accept=lambda tags: 'highway' in tags, reporter=sys.stdout )
+    osmdb.make_geometry(reporter=sys.stdout)
     osmdb.create_and_populate_edges_table(tolerant)
 
 def main():
