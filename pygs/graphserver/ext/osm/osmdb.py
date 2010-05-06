@@ -109,7 +109,7 @@ class OSMDB:
         
     def setup(self):
         c = self.get_cursor()
-        c.execute( "CREATE TABLE nodes (id TEXT, tags TEXT, lat FLOAT, lon FLOAT, endnode_refs INTEGER DEFAULT 1, vertex TEXT)" )
+        c.execute( "CREATE TABLE nodes (id TEXT, tags TEXT, lat FLOAT, lon FLOAT, vertex TEXT)" )
         c.execute( "CREATE TABLE ways (id TEXT, tags TEXT, nds TEXT)" )
         self.conn.commit()
         c.close()
@@ -124,7 +124,7 @@ class OSMDB:
         c.close()
         
     def populate(self, osm_filename, accept=lambda tags: True, reporter=None):
-        print "importing osm from XML to sqlite database"
+        print "Importing OSM from XML to SQLite database."
         
         c = self.get_cursor()
         
@@ -160,13 +160,13 @@ class OSMDB:
             @classmethod
             def endElement(self,name):
                 if name=='node':
-                    if superself.n_nodes%5000==0:
-                        print "node %d"%superself.n_nodes
+                    if superself.n_nodes%50000==0:
+                        print "Node %d" % superself.n_nodes
                     superself.n_nodes += 1
                     superself.add_node( self.currElem, c )
                 elif name=='way':
                     if superself.n_ways%5000==0:
-                        print "way %d"%superself.n_ways
+                        print "\rWay %d" % superself.n_ways
                     superself.n_ways += 1
                     superself.add_way( self.currElem, c )
 
@@ -499,11 +499,11 @@ class OSMDB:
 
     def make_vertices(self, reporter=None):
         if reporter: reporter.write("Fusing OSM nodes into vertices...\n")
-        c = self.conn
-        c.execute("CREATE TABLE vertices (id TEXT, endnode_refs INTEGER DEFAULT 1)")
-        c.execute("SELECT AddGeometryColumn ( 'vertices', 'GEOMETRY', 4326, 'POINT', 2 )")
-        c.execute("SELECT CreateSpatialIndex( 'vertices', 'GEOMETRY' )")
-        c.commit()
+        cur = self.conn.cursor()
+        cur.execute("CREATE TABLE vertices (id TEXT, refs INTEGER DEFAULT 1)")
+        cur.execute("SELECT AddGeometryColumn ( 'vertices', 'GEOMETRY', 4326, 'POINT', 2 )")
+        cur.execute("SELECT CreateSpatialIndex( 'vertices', 'GEOMETRY' )")
+        self.conn.commit()
         # StitchDisjunctGraphsFilter gives some good syntax hints.        
         # Could this somehow all be one query instead of python loops?        
         # this is slow, it's much easier to just deal with the duplicates.
@@ -511,13 +511,41 @@ class OSMDB:
         # for copying do something like: 
         #   spatialite> insert into vert (id, GEOM, refcount) 
         #               select id, MakePoint(lon, lat, SRS), 0 from nodes;
-        for nds, ct, lat, lon in c.execute("SELECT group_concat(id), count(*) as cnt, round(lat, 5) as rlat, round(lon, 5) as rlon from nodes GROUP BY rlat, rlon"):
+        cur.execute("SELECT group_concat(id), count(*) as cnt, round(lat, 5) as rlat, round(lon, 5) as rlon from nodes GROUP BY rlat, rlon")
+        for i, (nds, ct, lat, lon) in enumerate( cur.fetchall() ):
             first_node = "osm-" + nds.split(",")[0]
-            c.execute("UPDATE nodes SET vertex = ? WHERE id IN (?)", (first_node, nds))
-            c.execute("INSERT INTO vertices (id, GEOMETRY) VALUES (?, MakePoint(?, ?, 4326))", (first_node, lon, lat))
-            if ct > 1:
-                if reporter: reporter.write("Added vertex %s for %s.\n" % (first_node, nds))
-        c.commit()
+            cur.execute("UPDATE nodes SET vertex = ? WHERE id IN (?)", (first_node, nds))
+            cur.execute("INSERT INTO vertices (id, GEOMETRY) VALUES (?, MakePoint(?, ?, 4326))", (first_node, lon, lat))
+            if i % 50000 == 0 :
+                print "Vertex", i                
+        if reporter: reporter.write("Indexing vertex ids...\n")                
+        cur.execute( "CREATE INDEX IF NOT EXISTS vertex_id on vertices (id)" )
+        self.conn.commit()
+
+    def count_vertex_references(self, reporter=None):
+        """Populate vertices.refs. Necessary for simplifying ways into fewer edges later."""
+        if reporter: reporter.write("Counting OSM references to vertices...\n")
+        cur = self.conn.cursor()
+        ref_counts = {}
+        cur.execute( "SELECT id, vertex FROM nodes" )
+        aliases = dict( cur.fetchall() )
+        cur.execute( "SELECT nds from ways" )
+        for i, (nds_str,) in enumerate( cur.fetchall() ):
+            if i % 5000 == 0:
+                print "Way", i                
+            nds = json.loads( nds_str )
+            for nd in nds:
+                v = aliases[nd]                
+                # second parameter to get function is a default value. cannot increment when key is not yet in dict.
+                ref_counts[ v ] = ref_counts.get( v, 0 )+1
+        print "Updating vertices table..."
+        for i, (vertex_id, ref_count) in enumerate(ref_counts.items()):
+            if i % 50000 == 0:
+                print "vertex %i" % (i)    
+            # what if ref_count is 0?        
+            if ref_count > 1:
+                cur.execute( "UPDATE vertices SET refs = ? WHERE id=?", (ref_count, vertex_id) )
+        self.conn.commit()
 
 def test_wayrecord():
     wr = WayRecord( "1", {'highway':'bumpkis'}, ['1','2','3'] )
@@ -535,6 +563,8 @@ def osm_to_osmdb(osm_filename, osmdb_filename, tolerant=False):
     osmdb.populate( osm_filename, accept=lambda tags: 'highway' in tags, reporter=sys.stdout )
     osmdb.make_geometry(reporter=sys.stdout)
     osmdb.make_vertices(reporter=sys.stdout)
+    osmdb.count_vertex_references(reporter=sys.stdout)
+    print "Done."
     # osmdb.create_and_populate_edges_table(tolerant)
 
 def main():
