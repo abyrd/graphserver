@@ -86,11 +86,16 @@ class OSMDB:
                 pass
             
         self.conn = sqlite3.connect(dbname)
+        self.conn.enable_load_extension(True)
+        try :
+            # self.conn.execute("SELECT load_extension('libspatialite.so.2')")
+            # macos
+            self.conn.execute("SELECT load_extension('libspatialite.dylib')")
+        except :
+            sys.stderr.write("I need libspatialite, and pysqlite must be compiled with enable_load_extension.\n")
+            sys.exit(23)
         
-        if rtree_index:
-            self.index = Rtree( dbname )
-        else:
-            self.index = None
+        self.index = None
         
         if overwrite:
             self.setup()
@@ -109,8 +114,13 @@ class OSMDB:
         
     def setup(self):
         c = self.get_cursor()
-        c.execute( "CREATE TABLE nodes (id TEXT, tags TEXT, lat FLOAT, lon FLOAT, vertex TEXT)" )
-        c.execute( "CREATE TABLE ways (id TEXT, tags TEXT, nds TEXT)" )
+        c.execute( "CREATE TABLE nodes (id INTEGER, tags TEXT, lat FLOAT, lon FLOAT, refs INTEGER DEFAULT 0, alias TEXT)" )
+        c.execute( "CREATE TABLE ways (id INTEGER, tags TEXT, nds TEXT)" )
+        c.execute( "SELECT InitSpatialMetaData()")
+        # instead of initializing all the reference systems, add only WGS84 lat-lon
+        c.execute( "INSERT INTO spatial_ref_sys (srid, auth_name, auth_srid, ref_sys_name, proj4text) VALUES (4326, 'epsg', 4326, 'WGS 84', '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs')")
+        # For nodes, add a 2D point column in WGS84 lat-lon reference system
+        c.execute( "SELECT AddGeometryColumn ( 'nodes', 'geometry', 4326, 'POINT', 2 )")
         self.conn.commit()
         c.close()
         
@@ -333,7 +343,7 @@ class OSMDB:
         else:
             close_cursor = False
             
-        curs.execute("INSERT INTO nodes (id, tags, lat, lon) VALUES (?, ?, ?, ?)", ( node.id, json.dumps(node.tags), node.lat, node.lon ) )
+        curs.execute("INSERT INTO nodes (id, tags, lat, lon, geometry) VALUES (?, ?, ?, ?, MakePoint(?, ?, 4326))", ( node.id, json.dumps(node.tags), node.lat, node.lon, node.lon, node.lat ) )
         
         if close_cursor:
             self.conn.commit()
@@ -475,34 +485,12 @@ class OSMDB:
     def cursor(self):
         return self.get_cursor()    
 
-    def make_geometry(self, reporter = None):
-        c = self.conn
-        if reporter: reporter.write("Initializing spatial database tables...\n")
-        c.enable_load_extension(True)
-        try :
-            c.execute("SELECT load_extension('libspatialite.so.2')")
-            c.execute("SELECT InitSpatialMetaData()")
-        except :
-            if reporter: reporter.write("Cannot make geometry columns. You need libspatialite.so.2, and pysqlite must be compiled with enable_load_extension.\n")
-            return
-        # instead of initializing all the reference systems, add only WGS84 lat-lon
-        c.execute("INSERT INTO spatial_ref_sys (srid, auth_name, auth_srid, ref_sys_name, proj4text) VALUES (4326, 'epsg', 4326, 'WGS 84', '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs')")
-        # For nodes, add a 2D point column in WGS84 lat-lon reference system
-        if reporter: reporter.write("Making node table geometry column...\n")
-        c.execute("SELECT AddGeometryColumn ( 'nodes', 'GEOMETRY', 4326, 'POINT', 2 )")
-        #c.execute("SELECT CreateSpatialIndex( 'nodes', 'GEOMETRY' )")
-        #c.execute("UPDATE nodes SET GEOMETRY = MakePoint( lon, lat, 4326 )")
-        c.commit()
-        if reporter: 
-            reporter.write("done.\n")
-            reporter.flush()
-
     def make_vertices(self, reporter=None):
         if reporter: reporter.write("Fusing OSM nodes into vertices...\n")
         cur = self.conn.cursor()
-        cur.execute("CREATE TABLE vertices (id TEXT, refs INTEGER DEFAULT 1)")
-        cur.execute("SELECT AddGeometryColumn ( 'vertices', 'GEOMETRY', 4326, 'POINT', 2 )")
-        cur.execute("SELECT CreateSpatialIndex( 'vertices', 'GEOMETRY' )")
+        cur.execute("CREATE TABLE vertices (id TEXT, refs INTEGER DEFAULT 0)")
+        cur.execute("SELECT AddGeometryColumn ( 'vertices', 'geometry', 4326, 'POINT', 2 )")
+        # cur.execute("SELECT CreateSpatialIndex( 'vertices', 'GEOMETRY' )")
         self.conn.commit()
         # StitchDisjunctGraphsFilter gives some good syntax hints.        
         # Could this somehow all be one query instead of python loops?        
@@ -511,40 +499,35 @@ class OSMDB:
         # for copying do something like: 
         #   spatialite> insert into vert (id, GEOM, refcount) 
         #               select id, MakePoint(lon, lat, SRS), 0 from nodes;
-        cur.execute("SELECT group_concat(id), count(*) as cnt, round(lat, 5) as rlat, round(lon, 5) as rlon from nodes GROUP BY rlat, rlon")
-        for i, (nds, ct, lat, lon) in enumerate( cur.fetchall() ):
+        cur.execute("SELECT group_concat(id), sum(refs) as refs, round(lat, 5) as rlat, round(lon, 5) as rlon from nodes GROUP BY rlat, rlon")
+        for i, (nds, refs, lat, lon) in enumerate( cur.fetchall() ):
             first_node = "osm-" + nds.split(",")[0]
-            cur.execute("UPDATE nodes SET vertex = ? WHERE id IN (?)", (first_node, nds))
-            cur.execute("INSERT INTO vertices (id, GEOMETRY) VALUES (?, MakePoint(?, ?, 4326))", (first_node, lon, lat))
-            if i % 50000 == 0 :
-                print "Vertex", i                
+            cur.execute("UPDATE nodes SET alias = ? WHERE id IN (?)", (first_node, nds))
+            cur.execute("INSERT INTO vertices (id, refs, geometry) VALUES (?, ?, MakePoint(?, ?, 4326))", (first_node, refs, lon, lat))
+            if i % 50000 == 0 : print "Vertex", i                
         if reporter: reporter.write("Indexing vertex ids...\n")                
         cur.execute( "CREATE INDEX IF NOT EXISTS vertex_id on vertices (id)" )
         self.conn.commit()
 
-    def count_vertex_references(self, reporter=None):
-        """Populate vertices.refs. Necessary for simplifying ways into fewer edges later."""
-        if reporter: reporter.write("Counting OSM references to vertices...\n")
+    def count_node_references(self, reporter=None):
+        """Populate nodes.refs. Necessary for simplifying ways into fewer edges later."""
+        if reporter : reporter.write("Counting OSM references to nodes...\n")
         cur = self.conn.cursor()
         ref_counts = {}
-        cur.execute( "SELECT id, vertex FROM nodes" )
-        aliases = dict( cur.fetchall() )
         cur.execute( "SELECT nds from ways" )
         for i, (nds_str,) in enumerate( cur.fetchall() ):
-            if i % 5000 == 0:
-                print "Way", i                
+            if i % 5000 == 0 : print "Way", i                
             nds = json.loads( nds_str )
-            for nd in nds:
-                v = aliases[nd]                
+            for nd in nds :
                 # second parameter to get function is a default value. cannot increment when key is not yet in dict.
-                ref_counts[ v ] = ref_counts.get( v, 0 )+1
-        print "Updating vertices table..."
-        for i, (vertex_id, ref_count) in enumerate(ref_counts.items()):
-            if i % 50000 == 0:
-                print "vertex %i" % (i)    
+                ref_counts[ nd ] = ref_counts.get( nd, 0 ) + 1
+
+        print "Updating reference counts in nodes table..."
+        for i, (node_id, ref_count) in enumerate(ref_counts.items()):
+            if i % 50000 == 0 : print "Node %i" % (i)    
             # what if ref_count is 0?        
-            if ref_count > 1:
-                cur.execute( "UPDATE vertices SET refs = ? WHERE id=?", (ref_count, vertex_id) )
+            # if ref_count > 1:
+            cur.execute( "UPDATE nodes SET refs = ? WHERE id=?", (ref_count, node_id) )
         self.conn.commit()
 
 def test_wayrecord():
@@ -561,11 +544,9 @@ def test_wayrecord():
 def osm_to_osmdb(osm_filename, osmdb_filename, tolerant=False):
     osmdb = OSMDB( osmdb_filename, overwrite=True )
     osmdb.populate( osm_filename, accept=lambda tags: 'highway' in tags, reporter=sys.stdout )
-    osmdb.make_geometry(reporter=sys.stdout)
+    osmdb.count_node_references(reporter=sys.stdout)
     osmdb.make_vertices(reporter=sys.stdout)
-    osmdb.count_vertex_references(reporter=sys.stdout)
     print "Done."
-    # osmdb.create_and_populate_edges_table(tolerant)
 
 def main():
     from sys import argv
