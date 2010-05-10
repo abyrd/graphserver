@@ -502,6 +502,7 @@ class GTFSDatabase:
                 
         return ret
                 
+    # move me into init
     def make_geometry(self, reporter = None):
         c = self.conn
         c.enable_load_extension(True)
@@ -516,9 +517,9 @@ class GTFSDatabase:
         c.execute("INSERT INTO spatial_ref_sys (srid, auth_name, auth_srid, ref_sys_name, proj4text) VALUES (4326, 'epsg', 4326, 'WGS 84', '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs')")
         # For stops, add a 2D point column in WGS84 lat-lon reference system
         if reporter: reporter.write("Making stop geometry...\n")
-        c.execute("SELECT AddGeometryColumn ( 'stops', 'GEOMETRY', 4326, 'POINT', 2 )")
-        c.execute("SELECT CreateSpatialIndex( 'stops', 'GEOMETRY' )")
-        c.execute("UPDATE stops SET GEOMETRY = MakePoint( stop_lon, stop_lat, 4326 )")
+        c.execute("SELECT AddGeometryColumn ( 'stops', 'geometry', 4326, 'POINT', 2 )")
+        c.execute("SELECT CreateSpatialIndex( 'stops', 'geometry' )")
+        c.execute("UPDATE stops SET geometry = MakePoint( stop_lon, stop_lat, 4326 )")
         c.commit()
 
 

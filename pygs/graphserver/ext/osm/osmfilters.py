@@ -143,21 +143,18 @@ class PurgeDisjunctGraphsFilter(OSMDBFilter):
         c = db.cursor()
 
         # when slicing, end index can be larger than list size! very useful for blocking.
+        print "deleting ways segments in smaller disjunct graphs..." 
         for i in range(0, len(purge_list), 100):
-            query = "DELETE from edges WHERE start_nd in ('%s')" % "','".join(purge_list[i:i+100])
+            query = "DELETE from way_segments WHERE start_vertex in ('%s')" % "','".join(purge_list[i:i+100])
             c.execute(query)
             # this should not be necessary since the graphs are by definition disjunct
-            query = "DELETE from edges WHERE end_nd   in ('%s')" % "','".join(purge_list[i:i+100])
+            query = "DELETE from way_segments WHERE end_vertex   in ('%s')" % "','".join(purge_list[i:i+100])
             c.execute(query)
         db.conn.commit()
         c.close()
-        print "Deleted %s edges" % (len(purge_list))
+        print "Deleted edges using %s nodes" % (len(purge_list))
         
         # Don't need to delete the nodes from the OSM, only those used by edges will be imported.
-        # But unused nodes should be removed from the index so they are not used in linking.
-        for node_id in purge_list :
-            id, tags, lat, lon, endnode_refs = db.node(node_id)
-            db.index.delete(long(node_id), (lon, lat))
             
         # Leave the tables to visualize results in GIS.
         #f.teardown(db)
@@ -214,16 +211,16 @@ class FindDisjunctGraphsFilter(OSMDBFilter):
         
         vertices = {}
         print "load vertices into memory"
-        for row in osmdb.execute("SELECT DISTINCT start_nd from edges"):
+        for row in osmdb.execute("SELECT DISTINCT start_vertex from way_segments"):
             g.add_vertex(str(row[0]))
             vertices[str(row[0])] = 0
 
-        for row in osmdb.execute("SELECT DISTINCT end_nd from edges"):
+        for row in osmdb.execute("SELECT DISTINCT end_vertex from way_segments"):
             g.add_vertex(str(row[0]))
             vertices[str(row[0])] = 0
 
         print "load edges into memory"
-        for start_nd, end_nd in osmdb.execute("SELECT start_nd, end_nd from edges"):
+        for start_nd, end_nd in osmdb.execute("SELECT start_vertex, end_vertex from way_segments"):
             g.add_edge(start_nd, end_nd, Link())
             g.add_edge(end_nd, start_nd, Link())
                
@@ -242,7 +239,7 @@ class FindDisjunctGraphsFilter(OSMDBFilter):
             spt = g.shortest_path_tree(vertex, None, State(1,0))
             print "Found shortest path tree with %d vertices." % spt.size
             for v in spt.vertices:
-                lat, lon = c.execute("SELECT lat, lon from nodes where id=?", (v.label, )).next()
+                lat, lon = c.execute("SELECT y(geometry), x(geometry) from vertices where id=?", (v.label, )).next()
                 c.execute("INSERT into graph_nodes VALUES (?, ?, ?)", (iteration, v.label, "POINT(%f %f)" % (lon, lat)))
                 #print v.label
                 vertices.pop(v.label, None)
@@ -256,18 +253,11 @@ class FindDisjunctGraphsFilter(OSMDBFilter):
             t0 = t1
             iteration += 1
         osmdb.conn.commit()       
-        print 'Building edge geometry table...'
-        for way_id, parent_id, from_nd, to_nd, dist, coords, tags in osmdb.edges() :  
-            text_coords = [ "%f %f" % (lon, lat) for lon, lat in coords]
-            wkt_coords = "LINESTRING(%s)" % (','.join(text_coords))
-            graph_num = next(c.execute("SELECT graph_num from graph_nodes where node_id = ?", (from_nd,)))[0]
-            c.execute("INSERT into graph_edges VALUES (?, ?, ?)", (graph_num, from_nd + '->' + to_nd, wkt_coords))
-        osmdb.conn.commit()
         c.close()
         g.destroy()
         # audit
-        for gnum, count in osmdb.execute("SELECT graph_num, count(*) FROM graph_nodes GROUP BY graph_num"):
-            print "FOUND: %s=%s" % (gnum, count)
+        #for gnum, count in osmdb.execute("SELECT graph_num, count(*) FROM graph_nodes GROUP BY graph_num"):
+        #    print "FOUND: %s=%s" % (gnum, count)
         
     def visualize(self, db, out_filename, renderer="/usr/local/bin/prender/renderer"):
         

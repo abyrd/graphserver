@@ -90,7 +90,7 @@ class OSMDB:
         try :
             # self.conn.execute("SELECT load_extension('libspatialite.so.2')")
             # macos
-            self.conn.execute("SELECT load_extension('libspatialite.dylib')")
+            self.conn.execute("SELECT load_extension('libspatialite.so.2')")
         except :
             sys.stderr.write("I need libspatialite, and pysqlite must be compiled with enable_load_extension.\n")
             sys.exit(23)
@@ -315,10 +315,10 @@ class OSMDB:
     def edges(self):
         c = self.get_cursor()
         
-        c.execute( "SELECT edges.*, ways.tags FROM edges, ways WHERE ways.id = edges.parent_id" )
+        c.execute( "SELECT edges.*, ways.tags FROM edges, ways WHERE ways.id = edges.wayid" )
         
-        for way_id, parent_id, from_nd, to_nd, dist, geom, tags in c:
-            yield (way_id, parent_id, from_nd, to_nd, dist, unpack_coords(geom), json.loads(tags))
+        for way_id, parent_id, from_nd, to_nd, dist, geometry, tags in c:
+            yield (way_id, parent_id, from_nd, to_nd, dist, json.loads(tags))
             
         c.close()
         
@@ -502,7 +502,10 @@ class OSMDB:
         cur.execute("SELECT group_concat(id), sum(refs) as refs, round(lat, 5) as rlat, round(lon, 5) as rlon from nodes GROUP BY rlat, rlon")
         for i, (nds, refs, lat, lon) in enumerate( cur.fetchall() ):
             first_node = "osm-" + nds.split(",")[0]
-            cur.execute("UPDATE nodes SET alias = ? WHERE id IN (?)", (first_node, nds))
+            # String substitution into SQL below is intentional.
+            # otherwise the list of ids will be quoted like a string!
+            # which causes query to fail and aliases to be set to null... screwing things up down the line.
+            cur.execute("UPDATE nodes SET alias = ? WHERE id IN (%s)" % nds, (first_node,))
             cur.execute("INSERT INTO vertices (id, refs, geometry) VALUES (?, ?, MakePoint(?, ?, 4326))", (first_node, refs, lon, lat))
             if i % 50000 == 0 : print "Vertex", i                
         if reporter: reporter.write("Indexing vertex ids...\n")                
@@ -530,6 +533,166 @@ class OSMDB:
             cur.execute( "UPDATE nodes SET refs = ? WHERE id=?", (ref_count, node_id) )
         self.conn.commit()
 
+    def split_ways(self, reporter = None) :
+        if reporter : reporter.write( "Splitting ways into individual segments...\n" );
+        cur = self.conn.cursor()
+        cur.execute( "DROP TABLE IF EXISTS way_segments" )
+        cur.execute( "CREATE TABLE way_segments (id INTEGER, way INTEGER, dist FLOAT, length FLOAT, start_vertex TEXT, end_vertex TEXT, PRIMARY KEY(id))" )
+        cur.execute( "SELECT AddGeometryColumn ( 'way_segments', 'geometry', 4326, 'LINESTRING', 2 )" )
+        # can cache be made after loading segments?
+        cur.execute( "SELECT CreateSpatialIndex('way_segments', 'geometry')" )
+        self.conn.commit()
+
+        key = 0
+        for i, way in enumerate( self.ways() ) :
+            if i % 5000 == 0: print "Way", i
+            dist = 0
+            for sid, eid in zip(way.nds[:-1], way.nds[1:]) :
+                # if database is coherent this try clause should not be necessary.
+                # I'm keeping it for now just to be safe.
+                try:
+                    cur.execute( "SELECT lat, lon, alias FROM nodes WHERE id = ?", (sid,) )
+                    slat, slon, sv = cur.next()
+                    cur.execute( "SELECT lat, lon, alias FROM nodes WHERE id = ?", (eid,) )
+                    elat, elon, ev = cur.next()
+                    # print "SUCCEED!"
+                except:
+                    print "A referenced node was not in database:", sid, eid
+                    # i.e. the referenced node was not found in our database
+                    continue
+                if sv == None or ev == None : 
+                    print "A node alias is NULL in the database."
+                    continue               
+                # query preparation automatically quotes string for you, no need to explicitly put quotes in the string
+                wkt = "LINESTRING(%f %f, %f %f)" % (slon, slat, elon, elat)
+                length = vincenty(slat, slon, elat, elon) # in meters. spatialite 3.4 will have this function built in
+                cur.execute( "INSERT INTO way_segments VALUES (?, ?, ?, ?, ?, ?, LineFromText(?, 4326))", (key, way.id, dist, length, sv, ev, wkt) )
+                dist += length
+                key += 1
+        cur.execute( "CREATE INDEX way_segments_id ON way_segments (id)" )
+        self.conn.commit()
+
+    def find_or_make_link_vertex(self, lat, lon, split_threshold = 50, search_range = 0.01, reporter = None) :
+        import ligeos as lg
+        EARTH_RADIUS = 6367000
+        PI_OVER_180 =  0.017453293    
+        # here you don't need distance in meters since you're just looking for closest
+        sql = """SELECT *, distance(geometry, makepoint(?, ?)) AS d FROM way_segments WHERE id IN 
+                 (SELECT pkid FROM idx_way_segments_geometry where xmin > ? and xmax < ? and ymin > ? and ymax < ?) 
+                 ORDER BY d LIMIT 1"""
+        cur = self.conn.cursor()
+        # get the closest way segment
+        cur.execute( sql, (lon, lat, lon - search_range, lon + search_range, lat - search_range, lat + search_range) )
+        seg = cur.next() 
+        segid, way, off, length, sv, ev, geom, d = seg
+        print "    Found segment %d. way %d offset %d." % (segid, way, off)
+        # get the closest endpoint of this segment and its distance
+        cur.execute( "SELECT *, distance(geometry, makepoint(?, ?)) AS d FROM vertices WHERE id IN (?, ?) ORDER BY d LIMIT 1", (lon, lat, sv, ev) )
+        end = cur.next()
+        vid, refs, geom, d = end
+        d *= (EARTH_RADIUS * PI_OVER_180)
+        print "    Closest endpoint vertex %s at %d meters" % (vid, d)
+        if d < split_threshold :
+            print "    Link to existing vertex."
+            # should return or save vertex id in gtfsdb
+            cur.execute( "UPDATE vertices SET refs = refs + 1 WHERE id = ?", (vid,) )
+            self.conn.commit()
+            return vid
+        else :
+            # split the way segment in pieces to make a better linking point
+            print "    Existing vertex beyond threshold. Splitting way segment."
+            # get the segment start vertex coordinates
+            cur.execute( "SELECT x(geometry), y(geometry) FROM vertices WHERE id = ?", (sv,) )
+            slon, slat = cur.next()
+            # get the segment end vertex coordinates
+            cur.execute( "SELECT x(geometry), y(geometry) FROM vertices WHERE id = ?", (ev,) )
+            elon, elat = cur.next()
+            # make a linestring for the existing segment
+            ls  = lg.LineString([(slon, slat), (elon, elat)], geographic=True)
+            # find the ideal place to link
+            stop = lg.GPoint(lon, lat)
+            dist = ls.distance_pt(stop)
+            pt   = ls.closest_pt(stop)
+# SHOULD CHECK THAT NEW POINT IS NOT FARTHER THAN threshold, otherwise you get useless splittings.
+            # and its distance along the segment (float in range 0 to 1)
+            pos  = ls.locate_point(pt) 
+            pos *= length 
+            print "    Ideal link point %d meters away, %d meters along segment." % (dist, pos)
+            # make new vertex named wWAYdOFFSET
+            new_v_name = "w%do%d" % (way, off + pos)
+            cur.execute( "INSERT INTO vertices (id, refs, geometry) VALUES (?, 2, MakePoint(?, ?, 4326))", (new_v_name, pt.x, pt.y) )
+            # DEBUG make a new vertex to show stop location
+            # cur.execute( "INSERT INTO vertices (id, refs, geometry) VALUES ('gtfs_stop', 0, MakePoint(?, ?, 4326))", (lon, lat) )
+            cur.execute( "SELECT max(id) FROM way_segments" )
+            (max_segid,) = cur.next()
+            # make 2 new segments
+            wkt = "LINESTRING(%f %f, %f %f)" % (slon, slat, pt.x, pt.y)
+            cur.execute( "INSERT INTO way_segments (id, way, dist, length, start_vertex, end_vertex, geometry) VALUES (?, ?, ?, ?, ?, ?, LineFromText(?, 4326))", 
+                         (max_segid + 1, way, off, pos, sv, new_v_name, wkt) )
+            wkt = "LINESTRING(%f %f, %f %f)" % (pt.x, pt.y, elon, elat)
+            cur.execute( "INSERT INTO way_segments (id, way, dist, length, start_vertex, end_vertex, geometry) VALUES (?, ?, ?, ?, ?, ?, LineFromText(?, 4326))", 
+                         (max_segid + 2, way, off + pos, length - pos, new_v_name, ev, wkt) )
+            # drop old segment 
+            cur.execute( "DELETE FROM way_segments WHERE id = ?", (segid,) )
+            print "    Link to new vertex:", new_v_name
+            self.conn.commit()            
+            return new_v_name
+
+    def segments_to_edges(self, reporter = None) :
+        print "Converting way segments into graph edges..."
+        c = self.conn
+        cur = c.cursor()
+        cur.execute( "DROP TABLE IF EXISTS edges" )
+        cur.execute( "CREATE TABLE edges (id TEXT, wayid INTEGER, start_vertex TEXT, end_vertex TEXT, length FLOAT)" )
+        cur.execute( "SELECT AddGeometryColumn ( 'edges', 'geometry', 4326, 'LINESTRING', 2 )" )
+        c.commit()
+        def insert_edge( way, idx, sv, ev, length, geom ):
+            wkt = "LINESTRING( %s )" % ( ','.join(geom) )
+            id  = "w%d-%d" % (way, idx)
+            cur.execute( "INSERT INTO edges VALUES (?, ?, ?, ?, ?, LinestringFromText(?, 4326))", (id, way, sv, ev, length, wkt) )
+            # print "inserted", id
+            
+        last_way = -1
+        edge_length = 0
+        cur.execute( "SELECT way, dist, length, start_vertex, end_vertex FROM way_segments ORDER BY way, dist" )
+        way_count = 0
+        for way, dist, length, sv, ev in cur.fetchall() :
+            try :
+                # get the segment start vertex coordinates
+                cur.execute( "SELECT x(geometry), y(geometry), refs FROM vertices WHERE id = ?", (sv,) )
+                slon, slat, srefs = cur.next()
+                # get the segment end vertex coordinates
+                cur.execute( "SELECT x(geometry), y(geometry), refs FROM vertices WHERE id = ?", (ev,) )
+                elon, elat, erefs = cur.next()
+            except :
+                print "error fetching info on vertices", sv, ev
+                # this is a real problem! missing vertices!
+                continue
+                
+            if way != last_way :
+                if edge_length > 0 :
+                    insert_edge( last_way, idx, edge_sv, last_ev, edge_length, edge_geom )
+                if last_way != -1 : 
+                    # print "Inserted %d edges for way %d." % (idx, last_way)
+                    way_count += 1
+                    if way_count % 5000 == 0 : print "Way", way_count
+                idx = 0
+                edge_sv = sv
+                edge_length = 0
+                edge_geom = ["%f %f" % (slon, slat)]
+            edge_geom.append("%f %f" % (elon, elat))
+            edge_length += length
+            if erefs > 1 :
+                insert_edge( way, idx, edge_sv, ev, edge_length, edge_geom )
+                idx += 1
+                edge_sv = ev
+                edge_length = 0
+                edge_geom = ["%f %f" % (elon, elat)]
+            last_way = way 
+            last_ev  = ev        
+
+        c.commit()                
+
 def test_wayrecord():
     wr = WayRecord( "1", {'highway':'bumpkis'}, ['1','2','3'] )
     assert wr.id == "1"
@@ -546,6 +709,7 @@ def osm_to_osmdb(osm_filename, osmdb_filename, tolerant=False):
     osmdb.populate( osm_filename, accept=lambda tags: 'highway' in tags, reporter=sys.stdout )
     osmdb.count_node_references(reporter=sys.stdout)
     osmdb.make_vertices(reporter=sys.stdout)
+    osmdb.split_ways(reporter=sys.stdout)
     print "Done."
 
 def main():

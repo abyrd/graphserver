@@ -219,6 +219,20 @@ def gdb_load_gtfsdb_to_boardalight(gdb, agency_namespace, gtfsdb, cursor, agency
     for stop_id1, stop_id2, conn_type, distance in gtfsdb.execute( "SELECT * FROM connections" ):
         gdb.add_edge( "sta-%s"%stop_id1, "sta-%s"%stop_id2, Street( conn_type, distance ) )
         gdb.add_edge( "sta-%s"%stop_id2, "sta-%s"%stop_id1, Street( conn_type, distance ) )
+
+def gdb_load_gtfsdb_links(gdb, gtfsdb) :
+    from graphserver.core import Link    
+    gtfscur = gtfsdb.get_cursor()
+    gcur    = gdb.get_cursor()
+    print "Loading OSM links..."
+    gtfscur.execute( "SELECT * FROM osm_links" );
+    for i, (stopid, vertex) in enumerate(gtfscur.fetchall()) :
+        # osm namespace should not be hard coded
+        # add 2 links, one for each direction
+        gdb.add_edge( "sta-%s"%stopid, "osm-%s"%vertex, Link(), gcur)
+        gdb.add_edge( "osm-%s"%vertex, "sta-%s"%stopid, Link(), gcur)
+        if i % 1000 == 0: print "Station Link %d" % i
+    gdb.conn.commit()
         
 def main():
     usage = """usage: python gdb_import_gtfs.py [options] <graphdb_filename> <gtfsdb_filename> [<agency_id>]"""
@@ -244,6 +258,7 @@ def main():
     
     maxtrips = int(options.maxtrips) if options.maxtrips else None
     gdb_load_gtfsdb_to_boardalight(gdb, options.namespace, gtfsdb, gdb.get_cursor(), agency_id, maxtrips=maxtrips)
+    gdb_load_gtfsdb_links(gdb, gtfsdb)
     gdb.commit()
     
     print "done"

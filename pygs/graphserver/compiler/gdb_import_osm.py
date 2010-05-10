@@ -14,7 +14,8 @@ def gdb_import_osm(gdb, osmdb, vertex_namespace, slogs, profiledb=None):
     
     street_id_counter = 0
     street_names = {}
-    for i, (id, parent_id, node1, node2, distance, geom, tags) in enumerate( osmdb.edges() ):
+    # note: tags is not in the edges table, it's a join. 
+    for i, (id, parent_id, node1, node2, distance, tags) in enumerate( osmdb.edges() ):
         
         if i%(n_edges//100+1)==0: sys.stdout.write( "%d/%d edges loaded\r\n"%(i, n_edges))
             
@@ -97,6 +98,7 @@ def main():
     osmdb = OSMDB( osmdb_filename )
     gdb = GraphDatabase( graphdb_filename, overwrite=False )
     
+    osmdb.segments_to_edges()
     gdb_import_osm(gdb, osmdb, options.namespace, slogs, profiledb);
     
     print "done"

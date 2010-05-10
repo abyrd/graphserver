@@ -7,39 +7,40 @@ import sys
 from optparse import OptionParser
 
 def main():
-    usage = """usage: python gdb_link_osm_gtfs.py <graphdb_filename> <osmdb_filename> <gtfsdb_filename>"""
+    usage = """usage: python gdb_link_osm_gtfs.py <osmdb_filename> <gtfsdb_filename>"""
     parser = OptionParser(usage=usage)
     
     (options, args) = parser.parse_args()
     
-    if len(args) != 3:
+    if len(args) != 2:
         parser.print_help()
         exit(-1)
         
-    graphdb_filename = args[0]
-    osmdb_filename   = args[1]
-    gtfsdb_filename  = args[2]
+    osmdb_filename   = args[0]
+    gtfsdb_filename  = args[1]
     
     gtfsdb = GTFSDatabase( gtfsdb_filename )
     osmdb = OSMDB( osmdb_filename )
-    gdb = GraphDatabase( graphdb_filename )
 
-    n_stops = gtfsdb.count_stops()
-
-    c = gdb.get_cursor()
-    for i, (stop_id, stop_name, stop_lat, stop_lon) in enumerate( gtfsdb.stops() ):
-        print "%d/%d"%(i,n_stops)
-        
-        nd_id, nd_lat, nd_lon, nd_dist = osmdb.nearest_node( stop_lat, stop_lon )
-        station_vertex_id = "sta-%s"%stop_id
-        osm_vertex_id = "osm-%s"%nd_id
-        
-        print station_vertex_id, osm_vertex_id
-        
-        gdb.add_edge( station_vertex_id, osm_vertex_id, Link(), c )
-        gdb.add_edge( osm_vertex_id, station_vertex_id, Link(), c )
-
-    gdb.commit()
+    cur = gtfsdb.get_cursor()
+    cur.execute( "DROP TABLE IF EXISTS osm_links" )
+    # should also store distance from vertex to stop.
+    cur.execute( "CREATE TABLE osm_links (gtfs_stop TEXT, osm_vertex TEXT, PRIMARY KEY(gtfs_stop))" )
+    gtfsdb.conn.commit() 
+    nstops = gtfsdb.count_stops()
+    # for every stop in the GTFS database
+    for (i, (stopid, name, lat, lon)) in enumerate(gtfsdb.stops()) :
+        print "stop %i / %i :" % (i, nstops), stopid, name, lat, lon
+        link_vid = osmdb.find_or_make_link_vertex(lat, lon)
+        if link_vid :
+            cur.execute( "INSERT INTO osm_links VALUES (?, ?)", (stopid, link_vid) )
+            gtfsdb.conn.commit()
+        else :
+            print "for some reason, the osmdb didn't return a vertex."
+        # debug
+        if i > 20 : break
+    
+    print "DONE."
 
 if __name__=='__main__':
     main()
