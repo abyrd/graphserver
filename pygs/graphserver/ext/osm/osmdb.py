@@ -76,7 +76,7 @@ class WayRecord:
         return "<WayRecord id='%s'>"%self.id
 
 class OSMDB:
-    def __init__(self, dbname,overwrite=False,rtree_index=True):
+    def __init__(self, dbname, overwrite=False):
         self.dbname = dbname
         
         if overwrite:
@@ -100,7 +100,9 @@ class OSMDB:
             except:    
                 sys.stderr.write("(Py)SQLite cannot find libspatialite.so.2 or libspatialite.dylib.\n")
                 sys.exit(4)
-        
+
+        # do not wait for disk I/O to catch up
+        self.conn.execute( "PRAGMA synchronous=OFF" )
         if overwrite:
             self.setup()
             
@@ -118,27 +120,19 @@ class OSMDB:
         
     def setup(self):
         c = self.get_cursor()
-        c.execute( "CREATE TABLE nodes (id INTEGER, tags TEXT, lat FLOAT, lon FLOAT, refs INTEGER DEFAULT 0, alias TEXT)" )
-        c.execute( "CREATE TABLE ways (id INTEGER, tags TEXT, nds TEXT)" )
+        c.execute( "CREATE TABLE nodes (id INTEGER PRIMARY KEY, tags TEXT)" )
+        c.execute( "CREATE TABLE ways  (id INTEGER PRIMARY KEY, tags TEXT, nds TEXT)" )
         c.execute( "SELECT InitSpatialMetaData()")
         # instead of initializing all the reference systems, add only WGS84 lat-lon
         c.execute( "INSERT INTO spatial_ref_sys (srid, auth_name, auth_srid, ref_sys_name, proj4text) VALUES (4326, 'epsg', 4326, 'WGS 84', '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs')")
         # For nodes, add a 2D point column in WGS84 lat-lon reference system
         c.execute( "SELECT AddGeometryColumn ( 'nodes', 'geometry', 4326, 'POINT', 2 )")
-        self.conn.commit()
-        c.close()
-        
-    def create_indexes(self):
-        c = self.get_cursor()
-        c.execute( "CREATE INDEX nodes_id ON nodes (id)" )
-        c.execute( "CREATE INDEX nodes_lon ON nodes (lon)" )
-        c.execute( "CREATE INDEX nodes_lat ON nodes (lat)" )
-        c.execute( "CREATE INDEX ways_id ON ways (id)" )
+        # Could add a linestring geometry column for ways but it's  a waste of space
         self.conn.commit()
         c.close()
         
     def populate(self, osm_filename, accept=lambda tags: True, reporter=None):
-        print "Importing OSM from XML to SQLite database."
+        print "Importing OSM from XML to SQLite database..."
         
         c = self.get_cursor()
         
@@ -180,7 +174,7 @@ class OSMDB:
                     superself.add_node( self.currElem, c )
                 elif name=='way':
                     if superself.n_ways%5000==0:
-                        print "\rWay %d" % superself.n_ways
+                        print "Way %d" % superself.n_ways
                     superself.n_ways += 1
                     superself.add_way( self.currElem, c )
 
@@ -192,141 +186,8 @@ class OSMDB:
         
         self.conn.commit()
         c.close()
-        
-        print "indexing primary tables...",
-        self.create_indexes()
-        print "done"
-        
-    def set_endnode_ref_counts( self ):
-        """Populate ways.endnode_refs. Necessary for splitting ways into single-edge sub-ways"""
-        
-        print "counting end-node references to find way split-points"
-        
-        c = self.get_cursor()
-        
-        endnode_ref_counts = {}
-        
-        c.execute( "SELECT nds from ways" )
-        
-        print "...counting"
-        for i, (nds_str,) in enumerate(c):
-            if i%5000==0:
-                print i
-                
-            nds = json.loads( nds_str )
-            for nd in nds:
-                endnode_ref_counts[ nd ] = endnode_ref_counts.get( nd, 0 )+1
-        
-        print "...updating nodes table"
-        for i, (node_id, ref_count) in enumerate(endnode_ref_counts.items()):
-            if i%5000==0:
-                print i
-            
-            if ref_count > 1:
-                c.execute( "UPDATE nodes SET endnode_refs = ? WHERE id=?", (ref_count, node_id) )
-            
-        self.conn.commit()
-        c.close()
-    
-    def index_endnodes( self ):
-        print "indexing endpoint nodes into rtree"
-        
-        c = self.get_cursor()
-        
-        #TODO index endnodes if they're at the end of oneways - which only have one way ref, but are still endnodes
-        c.execute( "SELECT id, lat, lon FROM nodes WHERE endnode_refs > 1" )
-        
-        for id, lat, lon in c:
-            self.index.add( int(id), (lon, lat, lon, lat) )
-            
-        c.close()
-    
-    def create_and_populate_edges_table( self, tolerant=False ):
-        self.set_endnode_ref_counts()
-        self.index_endnodes()
-        
-        print "splitting ways and inserting into edge table"
-        
-        c = self.get_cursor()
-        
-        c.execute( "CREATE TABLE edges (id TEXT, parent_id TEXT, start_nd TEXT, end_nd TEXT, dist FLOAT, geom TEXT)" )
-        
-        for i, way in enumerate(self.ways()):
-            if i%5000==0:
-                print i
-            
-            subways = []
-            curr_subway = [ way.nds[0] ] # add first node to the current subway
-            for nd in way.nds[1:-1]:     # for every internal node of the way
-                curr_subway.append( nd )
-                try :
-                    if self.node(nd)[4] > 1: # node reference count is greater than one, node is shared by two ways
-                        subways.append( curr_subway )
-                        curr_subway = [ nd ]
-                except IndexError:
-                    if tolerant:
-                        # print "Missing node, ignoring."
-                        continue
-                    else:
-                        raise
-                
-            curr_subway.append( way.nds[-1] ) # add the last node to the current subway, and store the subway
-            subways.append( curr_subway );
-            
-            #insert into edge table
-            for i, subway in enumerate(subways):
-                try:
-                    coords = [(lambda x:(x[3],x[2]))(self.node(nd)) for nd in subway]
-                    packt = pack_coords( coords )
-                    dist = sum([vincenty(lat1, lng1, lat2, lng2) for (lng1, lat1), (lng2, lat2) in cons(coords)])
-                    c.execute( "INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?)", ("%s-%s"%(way.id, i),
-                                                                               way.id,
-                                                                               subway[0],
-                                                                               subway[-1],
-                                                                               dist,
-                                                                               packt) )
-                except IndexError:
-                    if tolerant:
-                        print "Missing node, ignoring edge."
-                        continue
-                    else:
-                        raise
-        
-        print "indexing edges...",
-        c.execute( "CREATE INDEX edges_id ON edges (id)" )
-        c.execute( "CREATE INDEX edges_parent_id ON edges (parent_id)" )
-        print "done"
-        
-        self.conn.commit()
-        c.close()
-        
-    def edge(self, id):
-        c = self.get_cursor()
-        
-        c.execute( "SELECT edges.*, ways.tags FROM edges, ways WHERE ways.id = edges.parent_id AND edges.id = ?", (id,) )
-        
-        try:
-            ret = c.next()
-            way_id, parent_id, from_nd, to_nd, dist, geom, tags = ret
-            return (way_id, parent_id, from_nd, to_nd, dist, unpack_coords( geom ), json.loads(tags))
-        except StopIteration:
-            c.close()
-            raise IndexError( "Database does not have an edge with id '%s'"%id )
-            
-        c.close()
-        return ret
-        
-    def edges(self):
-        c = self.get_cursor()
-        
-        c.execute( "SELECT edges.*, ways.tags FROM edges, ways WHERE ways.id = edges.wayid" )
-        
-        for way_id, parent_id, from_nd, to_nd, dist, geometry, tags in c:
-            yield (way_id, parent_id, from_nd, to_nd, dist, json.loads(tags))
-            
-        c.close()
-        
-        
+        print "Done."
+                    
     def add_way( self, way, curs=None ):
         if curs is None:
             curs = self.get_cursor()
@@ -347,7 +208,7 @@ class OSMDB:
         else:
             close_cursor = False
             
-        curs.execute("INSERT INTO nodes (id, tags, lat, lon, geometry) VALUES (?, ?, ?, ?, MakePoint(?, ?, 4326))", ( node.id, json.dumps(node.tags), node.lat, node.lon, node.lon, node.lat ) )
+        curs.execute("INSERT INTO nodes (id, tags, geometry) VALUES (?, ?, MakePoint(?, ?, 4326))", ( node.id, json.dumps(node.tags), node.lon, node.lat ) )
         
         if close_cursor:
             self.conn.commit()
@@ -490,99 +351,89 @@ class OSMDB:
         return self.get_cursor()    
 
     def make_vertices(self, reporter=None):
-        if reporter: reporter.write("Fusing OSM nodes into vertices...\n")
+        if reporter: reporter.write("Copying OSM nodes to vertices...\n")
         cur = self.conn.cursor()
-        cur.execute("CREATE TABLE vertices (id TEXT, refs INTEGER DEFAULT 0)")
+        cur.execute("DROP TABLE IF EXISTS vertices")
+        cur.execute("CREATE TABLE vertices (id INTEGER PRIMARY KEY, refs INTEGER DEFAULT 0, subgraph INTEGER)")
         cur.execute("SELECT AddGeometryColumn ( 'vertices', 'geometry', 4326, 'POINT', 2 )")
-        # cur.execute("SELECT CreateSpatialIndex( 'vertices', 'GEOMETRY' )")
+        cur.execute("SELECT CreateSpatialIndex( 'vertices', 'geometry' )")
+        cur.execute("INSERT INTO vertices (id, geometry) SELECT id, geometry FROM nodes")
         self.conn.commit()
-        # StitchDisjunctGraphsFilter gives some good syntax hints.        
-        # Could this somehow all be one query instead of python loops?        
-        # this is slow, it's much easier to just deal with the duplicates.
-        # i.e. copy nodes and ways to vertices and edges, then only manipulate V+E tables
-        # for copying do something like: 
-        #   spatialite> insert into vert (id, GEOM, refcount) 
-        #               select id, MakePoint(lon, lat, SRS), 0 from nodes;
-        cur.execute("SELECT group_concat(id), sum(refs) as refs, round(lat, 5) as rlat, round(lon, 5) as rlon from nodes GROUP BY rlat, rlon")
-        for i, (nds, refs, lat, lon) in enumerate( cur.fetchall() ):
-            first_node = "osm-" + nds.split(",")[0]
-            # String substitution into SQL below is intentional.
-            # otherwise the list of ids will be quoted like a string!
-            # which causes query to fail and aliases to be set to null... screwing things up down the line.
-            cur.execute("UPDATE nodes SET alias = ? WHERE id IN (%s)" % nds, (first_node,))
-            cur.execute("INSERT INTO vertices (id, refs, geometry) VALUES (?, ?, MakePoint(?, ?, 4326))", (first_node, refs, lon, lat))
-            if i % 50000 == 0 : print "Vertex", i                
-        if reporter: reporter.write("Indexing vertex ids...\n")                
-        cur.execute( "CREATE INDEX IF NOT EXISTS vertex_id on vertices (id)" )
-        self.conn.commit()
+        cur.close()
 
-    def count_node_references(self, reporter=None):
-        """Populate nodes.refs. Necessary for simplifying ways into fewer edges later."""
-        if reporter : reporter.write("Counting OSM references to nodes...\n")
+    def count_vertex_references(self, delete_unreferenced = True, reporter = None):
+        """Populate vertices.refs. Necessary for simplifying ways into fewer edges later."""
+        if reporter : reporter.write("Counting OSM way references to nodes...\n")
         cur = self.conn.cursor()
         ref_counts = {}
         cur.execute( "SELECT nds from ways" )
-        for i, (nds_str,) in enumerate( cur.fetchall() ):
-            if i % 5000 == 0 : print "Way", i                
+        for i, (nds_str,) in enumerate( cur.fetchall() ) :
+            if i % 5000 == 0 : print "Way", i             
             nds = json.loads( nds_str )
             for nd in nds :
                 # second parameter to get function is a default value. cannot increment when key is not yet in dict.
                 ref_counts[ nd ] = ref_counts.get( nd, 0 ) + 1
-
-        print "Updating reference counts in nodes table..."
+                # It seems somewhat faster to UPDATE from a python dict
+                # rather than update vertices incrementally in this loop
+                # cur.execute( "UPDATE vertices SET refs = refs + 1 WHERE id = ?", (nd,) )
+        
+        if reporter : reporter.write("Updating reference counts in vertices table...\n")
         for i, (node_id, ref_count) in enumerate(ref_counts.items()):
-            if i % 50000 == 0 : print "Node %i" % (i)    
-            # what if ref_count is 0?        
-            # if ref_count > 1:
-            cur.execute( "UPDATE nodes SET refs = ? WHERE id=?", (ref_count, node_id) )
+            if i % 50000 == 0 : print "Vertex %i" % (i)    
+            cur.execute( "UPDATE vertices SET refs = ? WHERE id = ?", (ref_count, node_id) )
+        if delete_unreferenced :
+            if reporter : reporter.write("Deleting unreferenced vertices...\n")
+            cur.execute( "DELETE FROM vertices WHERE refs = 0" )
+            if reporter : reporter.write("%d vertices deleted.\n" % cur.rowcount)
         self.conn.commit()
+        cur.close()
 
-    def split_ways(self, reporter = None) :
-        if reporter : reporter.write( "Splitting ways into individual segments...\n" );
+    def segment_ways(self, reporter = None) :
+        if reporter : reporter.write( "Breaking ways into individual segments...\n" );
         cur = self.conn.cursor()
         cur.execute( "DROP TABLE IF EXISTS way_segments" )
-        cur.execute( "CREATE TABLE way_segments (id INTEGER, way INTEGER, dist FLOAT, length FLOAT, start_vertex TEXT, end_vertex TEXT, PRIMARY KEY(id))" )
+        cur.execute( "CREATE TABLE way_segments (id INTEGER PRIMARY KEY, way INTEGER, offset FLOAT, length FLOAT, vertex1 INTEGER, vertex2 INTEGER)" )
         cur.execute( "SELECT AddGeometryColumn ( 'way_segments', 'geometry', 4326, 'LINESTRING', 2 )" )
         # can cache be made after loading segments?
-        cur.execute( "SELECT CreateSpatialIndex('way_segments', 'geometry')" )
+        cur.execute( "SELECT CreateSpatialIndex( 'way_segments', 'geometry' )" )
         self.conn.commit()
 
-        key = 0
+        n_bad_refs = 0
         for i, way in enumerate( self.ways() ) :
             if i % 5000 == 0: print "Way", i
-            dist = 0
-            for sid, eid in zip(way.nds[:-1], way.nds[1:]) :
+            offset = 0
+            for sv, ev in zip(way.nds[:-1], way.nds[1:]) :
                 # if database is coherent this try clause should not be necessary.
                 # I'm keeping it for now just to be safe.
                 try:
-                    cur.execute( "SELECT lat, lon, alias FROM nodes WHERE id = ?", (sid,) )
-                    slat, slon, sv = cur.next()
-                    cur.execute( "SELECT lat, lon, alias FROM nodes WHERE id = ?", (eid,) )
-                    elat, elon, ev = cur.next()
-                    # print "SUCCEED!"
+                    cur.execute( "SELECT x(geometry), y(geometry) FROM vertices WHERE id = ?", (sv,) )
+                    slon, slat = cur.next()
+                    cur.execute( "SELECT x(geometry), y(geometry) FROM vertices WHERE id = ?", (ev,) )
+                    elon, elat = cur.next()
                 except:
-                    print "A referenced node was not in database:", sid, eid
+                    # print "A referenced node was not in database:", sid, eid
                     # i.e. the referenced node was not found in our database
+                    n_bad_refs += 1
                     continue
-                if sv == None or ev == None : 
-                    print "A node alias is NULL in the database."
-                    continue               
                 # query preparation automatically quotes string for you, no need to explicitly put quotes in the string
                 wkt = "LINESTRING(%f %f, %f %f)" % (slon, slat, elon, elat)
                 length = vincenty(slat, slon, elat, elon) # in meters. spatialite 3.4 will have this function built in
-                cur.execute( "INSERT INTO way_segments VALUES (?, ?, ?, ?, ?, ?, LineFromText(?, 4326))", (key, way.id, dist, length, sv, ev, wkt) )
-                dist += length
-                key += 1
-        cur.execute( "CREATE INDEX way_segments_id ON way_segments (id)" )
+                cur.execute( """INSERT INTO way_segments (way, offset, length, vertex1, vertex2, geometry)
+                                 VALUES (?, ?, ?, ?, ?, LineFromText(?, 4326))""", 
+                                (way.id, offset, length, sv, ev, wkt) )
+                offset += length
+        if reporter : reporter.write( "Skipped %d segments referencing missing nodes.\n" % n_bad_refs );
         self.conn.commit()
+        cur.close()
 
-    def find_or_make_link_vertex(self, lat, lon, split_threshold = 50, search_range = 0.01, reporter = None) :
+    def find_or_make_link_vertex(self, lat, lon, split_threshold = 50, search_range = 0.005, reporter = None) :
         import ligeos as lg
         EARTH_RADIUS = 6367000
         PI_OVER_180 =  0.017453293    
         # here you don't need distance in meters since you're just looking for closest
+        # do an intersection instead of a contains (see min/max inequalities)
         sql = """SELECT *, distance(geometry, makepoint(?, ?)) AS d FROM way_segments WHERE id IN 
-                 (SELECT pkid FROM idx_way_segments_geometry where xmin > ? and xmax < ? and ymin > ? and ymax < ?) 
+                 (SELECT pkid FROM idx_way_segments_geometry where xmax > ? and xmin < ? and ymax > ? and ymin < ?) 
                  ORDER BY d LIMIT 1"""
         cur = self.conn.cursor()
         # get the closest way segment
@@ -598,8 +449,8 @@ class OSMDB:
         print "    Closest endpoint vertex %s at %d meters" % (vid, d)
         if d < split_threshold :
             print "    Link to existing vertex."
-            # should return or save vertex id in gtfsdb
             cur.execute( "UPDATE vertices SET refs = refs + 1 WHERE id = ?", (vid,) )
+            # this is real slow in synchronous I/O operation
             self.conn.commit()
             return vid
         else :
@@ -697,43 +548,74 @@ class OSMDB:
 
         c.commit()   
     
-    def find_disjunct_graph_links(self) :
-        from graphserver.core import Graph, Link
+    def find_disjunct_graphs(self, reporter=None) :
+        from graphserver.core import Graph, Link, State
         g = Graph()
         vertices = {}
         print "Loading vertices into memory..."
-        for row in self.execute("SELECT DISTINCT start_vertex from way_segments"):
+        for row in self.execute("SELECT DISTINCT vertex1 FROM way_segments"):
             g.add_vertex(str(row[0]))
             vertices[str(row[0])] = 0
 
-        for row in self.execute("SELECT DISTINCT end_vertex from way_segments"):
+        for row in self.execute("SELECT DISTINCT vertex2 FROM way_segments"):
             g.add_vertex(str(row[0]))
             vertices[str(row[0])] = 0
 
         print "Loading edges into memory..."
-        for start_nd, end_nd in osmdb.execute("SELECT start_vertex, end_vertex from way_segments"):
+        for start_nd, end_nd in self.execute("SELECT vertex1, vertex2 FROM way_segments"):
+            start_nd = str(start_nd)
+            end_nd   = str(end_nd)
             g.add_edge(start_nd, end_nd, Link())
             g.add_edge(end_nd, start_nd, Link())
                       
         print "Total number of vertices: ", len(vertices)
         iteration = 1
-        graphno = {}
+        # graphno = {}
         c = self.cursor()
         while True:
             try:
                 vertex, dummy = vertices.popitem()
             except:
                 break
+            # is it ok to do this with the non-dijkstra altorithm?
             spt = g.shortest_path_tree(vertex, None, State(1,0))
-            print "Found shortest path tree %d with %d vertices." % (iteration, spt.size)
+            print "Found shortest path tree %d with %d vertices. Recording its vertices..." % (iteration, spt.size)
             for v in spt.vertices:
-                graphno[v.label] = iteration
+                # graphno[v.label] = iteration
+                c.execute( "UPDATE vertices SET subgraph = ? WHERE id = ?", (iteration, v.label) )
                 vertices.pop(v.label, None)
             spt.destroy()
             print "%d vertices remaining." % (len(vertices))
             iteration += 1
         g.destroy()
+        self.conn.commit()
+        
+        c.execute( "SELECT subgraph, count(*) AS c FROM vertices GROUP BY subgraph ORDER BY c DESC LIMIT 1" )
+        biggest_graph = c.next()[0]
+        c.execute( "SELECT id FROM vertices WHERE subgraph != ?", (biggest_graph,) ) 
+        small_graph_vertices = [x[0] for x in c.fetchall()]
+        results = []
+        EARTH_RADIUS = 6367000
+        PI_OVER_180 =  0.017453293    
+        for i, vertex in enumerate(small_graph_vertices):
+            if i % 5000 == 0 : print "Vertex", i
+            c.execute( "SELECT x(geometry), y(geometry), subgraph FROM vertices WHERE id = ?", (vertex,) )
+            lon, lat, subgraph = c.next()
+            r = 0.0005 
+            # WHERE id != ? AND
+            c.execute( """SELECT id, distance(MakePoint(?, ?), geometry), subgraph
+                          FROM vertices WHERE rowid IN 
+                          ( SELECT pkid FROM idx_vertices_geometry 
+                          WHERE xmin > ? AND xmax < ? AND ymin > ? AND ymax < ? )""", (lon, lat, lon - r, lon + r, lat - r, lat + r) )
+            for vid, dist, sg in c.fetchall():
+                if vertex != vid : 
+                    dist *= EARTH_RADIUS * PI_OVER_180
+                    results.append((vertex, vid, dist, subgraph == sg))
+        for o, d, dist, same_graph in results:
+            # double links are already
+            if dist < 5: print o, d, dist, same_graph
 
+        
 
 def test_wayrecord():
     wr = WayRecord( "1", {'highway':'bumpkis'}, ['1','2','3'] )
@@ -747,12 +629,13 @@ def test_wayrecord():
     assert wr.nds == ['1','2','3']
 
 def osm_to_osmdb(osm_filename, osmdb_filename, tolerant=False):
-    osmdb = OSMDB( osmdb_filename, overwrite=True )
-    osmdb.populate( osm_filename, accept=lambda tags: 'highway' in tags, reporter=sys.stdout )
-    osmdb.count_node_references(reporter=sys.stdout)
-    osmdb.make_vertices(reporter=sys.stdout)
-    osmdb.split_ways(reporter=sys.stdout)
-    #osmdb.find_disjunct_graph_links(reporter=sys.)
+    #osmdb = OSMDB( osmdb_filename, overwrite=True )
+    osmdb = OSMDB( osmdb_filename, overwrite=False)   
+    #osmdb.populate( osm_filename, accept=lambda tags: 'highway' in tags, reporter=sys.stdout )
+    #osmdb.make_vertices( reporter=sys.stdout )
+    #osmdb.count_vertex_references( reporter=sys.stdout )
+    #osmdb.segment_ways( reporter=sys.stdout )
+    osmdb.find_disjunct_graphs( reporter=sys.stdout )
     print "Done."
 
 def main():
