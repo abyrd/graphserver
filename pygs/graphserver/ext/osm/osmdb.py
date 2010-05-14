@@ -350,71 +350,57 @@ class OSMDB:
     def cursor(self):
         return self.get_cursor()    
 
-    def make_vertices(self, reporter=None):
-        if reporter: reporter.write("Copying OSM nodes to vertices...\n")
+    def make_vertices_and_segments(self, fuse_nodes=True, reporter=None):
         cur = self.conn.cursor()
-        cur.execute("DROP TABLE IF EXISTS vertices")
-        cur.execute("CREATE TABLE vertices (id INTEGER PRIMARY KEY, refs INTEGER DEFAULT 0, subgraph INTEGER)")
-        cur.execute("SELECT AddGeometryColumn ( 'vertices', 'geometry', 4326, 'POINT', 2 )")
-        cur.execute("SELECT CreateSpatialIndex( 'vertices', 'geometry' )")
-        cur.execute("INSERT INTO vertices (id, geometry) SELECT id, geometry FROM nodes")
-        self.conn.commit()
-        cur.close()
+        node_alias = {}
+        if fuse_nodes :
+            if reporter : reporter.write("Finding superimposed OSM nodes...\n")
+            # pdx has 389333 nodes. no rounding gives 385594. rounding to 5 places gives 385389. 
+            # cur.execute("SELECT group_concat(id), round(X(geometry), 5) AS rlon, round(Y(geometry), 5) AS rlat FROM nodes GROUP BY rlat, rlon")
+            cur.execute("SELECT group_concat(id), X(geometry) AS rlon, Y(geometry) AS rlat FROM nodes GROUP BY rlat, rlon")
+            if reporter : reporter.write("Storing OSM node aliases...\n")
+            for i, (nds, lon, lat) in enumerate( cur.fetchall() ):
+                if i % 50000 == 0 : print "Node", i 
+                nds = nds.split(",")
+                first_nd = nds[0]
+                for nd in nds :
+                    #if len(nds) > 1 : print "%s -> %s" % (nd, first_nd)
+                    node_alias[nd] = first_nd
+            if reporter : reporter.write("Found %d spatially distinct nodes.\n" % i)
+        else : # do not fuse nodes
+            print "currently unsupported."
+            sys.exit(0)
 
-    def count_vertex_references(self, delete_unreferenced = True, reporter = None):
-        """Populate vertices.refs. Necessary for simplifying ways into fewer edges later."""
-        if reporter : reporter.write("Counting OSM way references to nodes...\n")
-        cur = self.conn.cursor()
-        ref_counts = {}
-        cur.execute( "SELECT nds from ways" )
-        for i, (nds_str,) in enumerate( cur.fetchall() ) :
-            if i % 5000 == 0 : print "Way", i             
-            nds = json.loads( nds_str )
-            for nd in nds :
-                # second parameter to get function is a default value. cannot increment when key is not yet in dict.
-                ref_counts[ nd ] = ref_counts.get( nd, 0 ) + 1
-                # It seems somewhat faster to UPDATE from a python dict
-                # rather than update vertices incrementally in this loop
-                # cur.execute( "UPDATE vertices SET refs = refs + 1 WHERE id = ?", (nd,) )
-        
-        if reporter : reporter.write("Updating reference counts in vertices table...\n")
-        for i, (node_id, ref_count) in enumerate(ref_counts.items()):
-            if i % 50000 == 0 : print "Vertex %i" % (i)    
-            cur.execute( "UPDATE vertices SET refs = ? WHERE id = ?", (ref_count, node_id) )
-        if delete_unreferenced :
-            if reporter : reporter.write("Deleting unreferenced vertices...\n")
-            cur.execute( "DELETE FROM vertices WHERE refs = 0" )
-            if reporter : reporter.write("%d vertices deleted.\n" % cur.rowcount)
-        self.conn.commit()
-        cur.close()
-
-    def segment_ways(self, reporter = None) :
         if reporter : reporter.write( "Breaking ways into individual segments...\n" );
-        cur = self.conn.cursor()
         cur.execute( "DROP TABLE IF EXISTS way_segments" )
         cur.execute( "CREATE TABLE way_segments (id INTEGER PRIMARY KEY, way INTEGER, offset FLOAT, length FLOAT, vertex1 INTEGER, vertex2 INTEGER)" )
         cur.execute( "SELECT AddGeometryColumn ( 'way_segments', 'geometry', 4326, 'LINESTRING', 2 )" )
         # can cache be made after loading segments?
         cur.execute( "SELECT CreateSpatialIndex( 'way_segments', 'geometry' )" )
-        self.conn.commit()
-
+        ref_counts = {}
         n_bad_refs = 0
         for i, way in enumerate( self.ways() ) :
-            if i % 5000 == 0: print "Way", i
+            if i % 5000 == 0 : print "Way", i
             offset = 0
-            for sv, ev in zip(way.nds[:-1], way.nds[1:]) :
-                # if database is coherent this try clause should not be necessary.
-                # I'm keeping it for now just to be safe.
+            # get unique vertex for this way's nodes
+            # note that some nodes may not have a vertex alias if they are not in the database (because of OSM bounding box cropping)
+            vs = []
+            for nd in way.nds :
                 try:
-                    cur.execute( "SELECT x(geometry), y(geometry) FROM vertices WHERE id = ?", (sv,) )
-                    slon, slat = cur.next()
-                    cur.execute( "SELECT x(geometry), y(geometry) FROM vertices WHERE id = ?", (ev,) )
-                    elon, elat = cur.next()
-                except:
-                    # print "A referenced node was not in database:", sid, eid
-                    # i.e. the referenced node was not found in our database
+                    v = node_alias[nd]
+                    vs.append(v)
+                    # second parameter to get function is a default value. cannot increment when key is not yet in dict.
+                    ref_counts[v] = ref_counts.get( v, 0 ) + 1
+                except KeyError:
                     n_bad_refs += 1
                     continue
+            # for sv, ev in cons(vs) :
+            for sv, ev in zip(vs[:-1], vs[1:]) :
+                # Get the geometry from nodes since vertex table does not yet exist. IDs are still identical here.
+                cur.execute( "SELECT x(geometry), y(geometry) FROM nodes WHERE id = ?", (sv,) )
+                slon, slat = cur.next()
+                cur.execute( "SELECT x(geometry), y(geometry) FROM nodes WHERE id = ?", (ev,) )
+                elon, elat = cur.next()
                 # query preparation automatically quotes string for you, no need to explicitly put quotes in the string
                 wkt = "LINESTRING(%f %f, %f %f)" % (slon, slat, elon, elat)
                 length = vincenty(slat, slon, elat, elon) # in meters. spatialite 3.4 will have this function built in
@@ -422,7 +408,16 @@ class OSMDB:
                                  VALUES (?, ?, ?, ?, ?, LineFromText(?, 4326))""", 
                                 (way.id, offset, length, sv, ev, wkt) )
                 offset += length
-        if reporter : reporter.write( "Skipped %d segments referencing missing nodes.\n" % n_bad_refs );
+
+        if reporter : reporter.write( "Making vertices based on way references...\n" )
+        cur.execute("DROP TABLE IF EXISTS vertices")
+        cur.execute("CREATE TABLE vertices (id INTEGER PRIMARY KEY, refs INTEGER, subgraph INTEGER)")
+        cur.execute("SELECT AddGeometryColumn ( 'vertices', 'geometry', 4326, 'POINT', 2 )")
+        cur.execute("SELECT CreateSpatialIndex( 'vertices', 'geometry' )")
+        for i, (vid, refs) in enumerate(ref_counts.items()) :
+            if i % 50000 == 0 : print "Vertex", i
+            cur.execute("INSERT INTO vertices (id, refs, geometry) SELECT id, ?, geometry FROM nodes WHERE id = ?", (refs, vid))
+        if reporter : reporter.write( "Made %d vertices.\n" % i )
         self.conn.commit()
         cur.close()
 
@@ -548,11 +543,12 @@ class OSMDB:
 
         c.commit()   
     
-    def find_disjunct_graphs(self, reporter=None) :
+    def find_disjunct_graphs(self, delete_edges=True, mark_vertices=True, reporter=None) :
+        if reporter : reporter.write( "Finding disjunct graphs...\n" )
         from graphserver.core import Graph, Link, State
         g = Graph()
         vertices = {}
-        print "Loading vertices into memory..."
+        print "Loading vertices into graph..."
         for row in self.execute("SELECT DISTINCT vertex1 FROM way_segments"):
             g.add_vertex(str(row[0]))
             vertices[str(row[0])] = 0
@@ -561,7 +557,7 @@ class OSMDB:
             g.add_vertex(str(row[0]))
             vertices[str(row[0])] = 0
 
-        print "Loading edges into memory..."
+        print "Loading edges into graph..."
         for start_nd, end_nd in self.execute("SELECT vertex1, vertex2 FROM way_segments"):
             start_nd = str(start_nd)
             end_nd   = str(end_nd)
@@ -572,6 +568,7 @@ class OSMDB:
         iteration = 1
         # graphno = {}
         c = self.cursor()
+        graphs = {}
         while True:
             try:
                 vertex, dummy = vertices.popitem()
@@ -580,40 +577,59 @@ class OSMDB:
             # is it ok to do this with the non-dijkstra altorithm?
             spt = g.shortest_path_tree(vertex, None, State(1,0))
             print "Found shortest path tree %d with %d vertices. Recording its vertices..." % (iteration, spt.size)
-            for v in spt.vertices:
-                # graphno[v.label] = iteration
-                c.execute( "UPDATE vertices SET subgraph = ? WHERE id = ?", (iteration, v.label) )
-                vertices.pop(v.label, None)
+            vlabels = [v.label for v in spt.vertices]
+            graphs[iteration] = vlabels
+            for vlabel in vlabels:
+                if mark_vertices : 
+                    c.execute( "UPDATE vertices SET subgraph = ? WHERE id = ?", (iteration, vlabel) )
+                vertices.pop(vlabel, None)
             spt.destroy()
             print "%d vertices remaining." % (len(vertices))
             iteration += 1
         g.destroy()
         self.conn.commit()
-        
-        c.execute( "SELECT subgraph, count(*) AS c FROM vertices GROUP BY subgraph ORDER BY c DESC LIMIT 1" )
-        biggest_graph = c.next()[0]
-        c.execute( "SELECT id FROM vertices WHERE subgraph != ?", (biggest_graph,) ) 
-        small_graph_vertices = [x[0] for x in c.fetchall()]
-        results = []
-        EARTH_RADIUS = 6367000
-        PI_OVER_180 =  0.017453293    
-        for i, vertex in enumerate(small_graph_vertices):
-            if i % 5000 == 0 : print "Vertex", i
-            c.execute( "SELECT x(geometry), y(geometry), subgraph FROM vertices WHERE id = ?", (vertex,) )
-            lon, lat, subgraph = c.next()
-            r = 0.0005 
-            # WHERE id != ? AND
-            c.execute( """SELECT id, distance(MakePoint(?, ?), geometry), subgraph
-                          FROM vertices WHERE rowid IN 
-                          ( SELECT pkid FROM idx_vertices_geometry 
-                          WHERE xmin > ? AND xmax < ? AND ymin > ? AND ymax < ? )""", (lon, lat, lon - r, lon + r, lat - r, lat + r) )
-            for vid, dist, sg in c.fetchall():
-                if vertex != vid : 
-                    dist *= EARTH_RADIUS * PI_OVER_180
-                    results.append((vertex, vid, dist, subgraph == sg))
-        for o, d, dist, same_graph in results:
-            # double links are already
-            if dist < 5: print o, d, dist, same_graph
+        if delete_edges :
+            print "indexing way segment vertices..."
+            c.execute( "CREATE INDEX IF NOT EXISTS way_segments_vertex1 ON way_segments (vertex1)" )
+            c.execute( "CREATE INDEX IF NOT EXISTS way_segments_vertex2 ON way_segments (vertex2)" )
+            c.execute( "SELECT subgraph, count(*) AS c FROM vertices GROUP BY subgraph ORDER BY c DESC LIMIT 1" )
+            biggest_graph = c.next()[0]
+            c.execute( """DELETE FROM way_segments WHERE id IN 
+                         (SELECT ws.id FROM vertices AS v, way_segments AS ws 
+                          WHERE v.subgraph != ? AND (ws.vertex1 = v.id OR ws.vertex2 = v.id) )""", (biggest_graph,) )
+            
+            # find key for max dict value: m = max(a, key=a.get)
+            #biggest_graph = max(graphs.iteritems(), key=lambda x:len(x[1])) [0]
+            #for k, v in graphs.iteritems() :
+            #    if k != biggest_graph :
+            #        print k
+                            
+        if mark_vertices :
+            # find distances from smaller graphs to nodes in other graphs
+            c.execute( "SELECT subgraph, count(*) AS c FROM vertices GROUP BY subgraph ORDER BY c DESC LIMIT 1" )
+            biggest_graph = c.next()[0]
+            c.execute( "SELECT id FROM vertices WHERE subgraph != ?", (biggest_graph,) ) 
+            small_graph_vertices = [x[0] for x in c.fetchall()]
+            results = []
+            EARTH_RADIUS = 6367000
+            PI_OVER_180 =  0.017453293    
+            for i, vertex in enumerate(small_graph_vertices):
+                if i % 5000 == 0 : print "Vertex", i
+                c.execute( "SELECT x(geometry), y(geometry), subgraph FROM vertices WHERE id = ?", (vertex,) )
+                lon, lat, subgraph = c.next()
+                r = 0.0005 
+                # WHERE id != ? AND
+                c.execute( """SELECT id, distance(MakePoint(?, ?), geometry), subgraph
+                              FROM vertices WHERE rowid IN 
+                              ( SELECT pkid FROM idx_vertices_geometry 
+                              WHERE xmin > ? AND xmax < ? AND ymin > ? AND ymax < ? )""", (lon, lat, lon - r, lon + r, lat - r, lat + r) )
+                for vid, dist, sg in c.fetchall():
+                    if vertex != vid : 
+                        dist *= EARTH_RADIUS * PI_OVER_180
+                        results.append((vertex, vid, dist, subgraph == sg))
+            for o, d, dist, same_graph in results:
+                # double links are already
+                if dist < 5: print o, d, dist, same_graph
 
         
 
@@ -632,9 +648,7 @@ def osm_to_osmdb(osm_filename, osmdb_filename, tolerant=False):
     #osmdb = OSMDB( osmdb_filename, overwrite=True )
     osmdb = OSMDB( osmdb_filename, overwrite=False)   
     #osmdb.populate( osm_filename, accept=lambda tags: 'highway' in tags, reporter=sys.stdout )
-    #osmdb.make_vertices( reporter=sys.stdout )
-    #osmdb.count_vertex_references( reporter=sys.stdout )
-    #osmdb.segment_ways( reporter=sys.stdout )
+    #osmdb.make_vertices_and_segments( reporter=sys.stdout )
     osmdb.find_disjunct_graphs( reporter=sys.stdout )
     print "Done."
 
