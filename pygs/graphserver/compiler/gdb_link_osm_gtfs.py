@@ -38,7 +38,7 @@ def main():
         else :
             print "for some reason, the osmdb didn't return a vertex."
         # debug
-        if i > 20 : break
+        # if i > 20 : break
     
     print "DONE."
 

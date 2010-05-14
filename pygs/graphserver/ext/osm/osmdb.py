@@ -691,7 +691,45 @@ class OSMDB:
             last_way = way 
             last_ev  = ev        
 
-        c.commit()                
+        c.commit()   
+    
+    def find_disjunct_graph_links(self) :
+        from graphserver.core import Graph, Link
+        g = Graph()
+        vertices = {}
+        print "Loading vertices into memory..."
+        for row in self.execute("SELECT DISTINCT start_vertex from way_segments"):
+            g.add_vertex(str(row[0]))
+            vertices[str(row[0])] = 0
+
+        for row in self.execute("SELECT DISTINCT end_vertex from way_segments"):
+            g.add_vertex(str(row[0]))
+            vertices[str(row[0])] = 0
+
+        print "Loading edges into memory..."
+        for start_nd, end_nd in osmdb.execute("SELECT start_vertex, end_vertex from way_segments"):
+            g.add_edge(start_nd, end_nd, Link())
+            g.add_edge(end_nd, start_nd, Link())
+                      
+        print "Total number of vertices: ", len(vertices)
+        iteration = 1
+        graphno = {}
+        c = self.cursor()
+        while True:
+            try:
+                vertex, dummy = vertices.popitem()
+            except:
+                break
+            spt = g.shortest_path_tree(vertex, None, State(1,0))
+            print "Found shortest path tree %d with %d vertices." % (iteration, spt.size)
+            for v in spt.vertices:
+                graphno[v.label] = iteration
+                vertices.pop(v.label, None)
+            spt.destroy()
+            print "%d vertices remaining." % (len(vertices))
+            iteration += 1
+        g.destroy()
+
 
 def test_wayrecord():
     wr = WayRecord( "1", {'highway':'bumpkis'}, ['1','2','3'] )
@@ -710,6 +748,7 @@ def osm_to_osmdb(osm_filename, osmdb_filename, tolerant=False):
     osmdb.count_node_references(reporter=sys.stdout)
     osmdb.make_vertices(reporter=sys.stdout)
     osmdb.split_ways(reporter=sys.stdout)
+    #osmdb.find_disjunct_graph_links(reporter=sys.)
     print "Done."
 
 def main():
