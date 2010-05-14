@@ -86,16 +86,20 @@ class OSMDB:
                 pass
             
         self.conn = sqlite3.connect(dbname)
-        self.conn.enable_load_extension(True)
-        try :
-            # self.conn.execute("SELECT load_extension('libspatialite.so.2')")
-            # macos
+        try:
+            self.conn.enable_load_extension(True)
+        except:
+            print "To load spatialite extensions, pysqlite must have enable_load_extension compiled in."
+            sys.exit(3)
+
+        try:
             self.conn.execute("SELECT load_extension('libspatialite.so.2')")
-        except :
-            sys.stderr.write("I need libspatialite, and pysqlite must be compiled with enable_load_extension.\n")
-            sys.exit(23)
-        
-        self.index = None
+        except:
+            try:
+                self.conn.execute("SELECT load_extension('libspatialite.dylib')")
+            except:    
+                sys.stderr.write("(Py)SQLite cannot find libspatialite.so.2 or libspatialite.dylib.\n")
+                sys.exit(4)
         
         if overwrite:
             self.setup()
