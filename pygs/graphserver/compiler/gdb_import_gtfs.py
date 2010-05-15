@@ -132,7 +132,7 @@ def gdb_load_gtfsdb_to_boardalight(gdb, agency_namespace, gtfsdb, cursor, agency
     # enter station vertices
     # this was very slow, do it in one transaction using cursor.
     c = gdb.get_cursor()
-    for stop_id, stop_name, stop_lat, stop_lon in gtfsdb.stops():
+    for stop_id, stop_name, stop_lat, stop_lon, geometry in gtfsdb.stops():
         station_vertex_label = "sta-%s"%stop_id
         reporter.write("adding station vertex '%s'\n"%station_vertex_label)
         # DEBUG comment out below to speed up testing        

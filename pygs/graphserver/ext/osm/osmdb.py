@@ -12,7 +12,6 @@ import xml.sax
 import binascii
 from vincenty import vincenty
 from struct import pack, unpack
-from rtree import Rtree
 
 def cons(ary):
     for i in range(len(ary)-1):

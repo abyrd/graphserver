@@ -58,7 +58,7 @@ def load_gtfs_table_to_sqlite(fp, gtfs_basename, cc, header=None):
     print( insert_template )
     for i, line in enumerate(rd):
         #print( i%50, line )
-        if i%5000==0: print(i)
+        if i % 100000 == 0 : print "Row", i
                
         # carry on quietly if there's a blank line in the csv
         if line == []:
@@ -507,7 +507,7 @@ class GTFSDatabase:
         c = self.conn
         c.enable_load_extension(True)
         try :
-            c.execute("SELECT load_extension('libspatialite.so.2')")
+            c.execute("SELECT load_extension('libspatialite.dylib')")
             c.execute("SELECT InitSpatialMetaData()")
         except :
             if reporter: reporter.write("Cannot make geometry columns. You need libspatialite.so.2, and pysqlite must be compiled with enable_load_extension.\n")

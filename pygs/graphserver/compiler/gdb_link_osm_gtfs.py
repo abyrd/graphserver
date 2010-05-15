@@ -29,8 +29,8 @@ def main():
     gtfsdb.conn.commit() 
     nstops = gtfsdb.count_stops()
     # for every stop in the GTFS database
-    for (i, (stopid, name, lat, lon)) in enumerate(gtfsdb.stops()) :
-        print "stop %i / %i :" % (i, nstops), stopid, name, lat, lon
+    for (i, (stopid, name, lat, lon, geom)) in enumerate(gtfsdb.stops()) :
+        if i % 100 == 0 : print "Stop %i / %i" % (i, nstops)
         link_vid = osmdb.find_or_make_link_vertex(lat, lon)
         if link_vid :
             cur.execute( "INSERT INTO osm_links VALUES (?, ?)", (stopid, link_vid) )
