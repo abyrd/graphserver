@@ -131,6 +131,7 @@ class OSMDB:
         self.conn.commit()
         c.close()
         
+    # accept function below is not used at all.
     def populate(self, osm_filename, accept=lambda tags: True, reporter=None):
         print "Importing OSM from XML to SQLite database..."
         
@@ -187,7 +188,33 @@ class OSMDB:
         self.conn.commit()
         c.close()
         print "Done."
-                    
+    
+    def edge(self, id):
+        c = self.get_cursor()
+        
+        c.execute( "SELECT edges.*, ways.tags FROM edges, ways WHERE ways.id = edges.parent_id AND edges.id = ?", (id,) )
+        
+        try:
+            ret = c.next()
+            way_id, parent_id, from_nd, to_nd, dist, geom, tags = ret
+            return (way_id, parent_id, from_nd, to_nd, dist, unpack_coords( geom ), json.loads(tags))
+        except StopIteration:
+            c.close()
+            raise IndexError( "Database does not have an edge with id '%s'"%id )
+            
+        c.close()
+        return ret
+        
+    def edges(self):
+        c = self.get_cursor()
+        
+        c.execute( "SELECT edges.*, ways.tags FROM edges, ways WHERE ways.id = edges.wayid" )
+        
+        for way_id, parent_id, from_nd, to_nd, dist, geometry, tags in c:
+            yield (way_id, parent_id, from_nd, to_nd, dist, json.loads(tags))
+            
+        c.close()
+                            
     def add_way( self, way, curs=None ):
         if curs is None:
             curs = self.get_cursor()
@@ -435,22 +462,21 @@ class OSMDB:
         cur.execute( sql, (lon, lat, lon - search_range, lon + search_range, lat - search_range, lat + search_range) )
         seg = cur.next() 
         segid, way, off, length, sv, ev, geom, d = seg
-        print "    Found segment %d. way %d offset %d." % (segid, way, off)
+        # print "    Found segment %d. way %d offset %d." % (segid, way, off)
         # get the closest endpoint of this segment and its distance
-        cur.execute( "SELECT *, distance(geometry, makepoint(?, ?)) AS d FROM vertices WHERE id IN (?, ?) ORDER BY d LIMIT 1", (lon, lat, sv, ev) )
-        end = cur.next()
-        vid, refs, geom, d = end
+        cur.execute( "SELECT id, distance(geometry, makepoint(?, ?)) AS d FROM vertices WHERE id IN (?, ?) ORDER BY d LIMIT 1", (lon, lat, sv, ev) )
+        vid, d = cur.next()
         d *= (EARTH_RADIUS * PI_OVER_180)
-        print "    Closest endpoint vertex %s at %d meters" % (vid, d)
+        # print "    Closest endpoint vertex %s at %d meters" % (vid, d)
         if d < split_threshold :
-            print "    Link to existing vertex."
+            # print "    Link to existing vertex."
             cur.execute( "UPDATE vertices SET refs = refs + 1 WHERE id = ?", (vid,) )
             # this is real slow in synchronous I/O operation
             self.conn.commit()
             return vid
         else :
             # split the way segment in pieces to make a better linking point
-            print "    Existing vertex beyond threshold. Splitting way segment."
+            # print "    Existing vertex beyond threshold. Splitting way segment."
             # get the segment start vertex coordinates
             cur.execute( "SELECT x(geometry), y(geometry) FROM vertices WHERE id = ?", (sv,) )
             slon, slat = cur.next()
@@ -464,60 +490,58 @@ class OSMDB:
             dist = ls.distance_pt(stop)
             pt   = ls.closest_pt(stop)
 # SHOULD CHECK THAT NEW POINT IS NOT FARTHER THAN threshold, otherwise you get useless splittings.
+# this might be responsible for 0 / none length segments
             # and its distance along the segment (float in range 0 to 1)
             pos  = ls.locate_point(pt) 
             pos *= length 
-            print "    Ideal link point %d meters away, %d meters along segment." % (dist, pos)
+            # print "    Ideal link point %d meters away, %d meters along segment." % (dist, pos)
             # make new vertex named wWAYdOFFSET
-            new_v_name = "w%do%d" % (way, off + pos)
-            cur.execute( "INSERT INTO vertices (id, refs, geometry) VALUES (?, 2, MakePoint(?, ?, 4326))", (new_v_name, pt.x, pt.y) )
+            # NO, make new numeric id
+            cur.execute( "SELECT max(id) FROM vertices" )
+            (new_vid,) = cur.next()
+            new_vid += 1
+            cur.execute( "INSERT INTO vertices (id, refs, geometry) VALUES (?, 2, MakePoint(?, ?, 4326))", (new_vid, pt.x, pt.y) )
             # DEBUG make a new vertex to show stop location
             # cur.execute( "INSERT INTO vertices (id, refs, geometry) VALUES ('gtfs_stop', 0, MakePoint(?, ?, 4326))", (lon, lat) )
             cur.execute( "SELECT max(id) FROM way_segments" )
             (max_segid,) = cur.next()
             # make 2 new segments
             wkt = "LINESTRING(%f %f, %f %f)" % (slon, slat, pt.x, pt.y)
-            cur.execute( "INSERT INTO way_segments (id, way, dist, length, start_vertex, end_vertex, geometry) VALUES (?, ?, ?, ?, ?, ?, LineFromText(?, 4326))", 
-                         (max_segid + 1, way, off, pos, sv, new_v_name, wkt) )
+            cur.execute( "INSERT INTO way_segments (id, way, offset, length, vertex1, vertex2, geometry) VALUES (?, ?, ?, ?, ?, ?, LineFromText(?, 4326))", 
+                         (max_segid + 1, way, off, pos, sv, new_vid, wkt) )
             wkt = "LINESTRING(%f %f, %f %f)" % (pt.x, pt.y, elon, elat)
-            cur.execute( "INSERT INTO way_segments (id, way, dist, length, start_vertex, end_vertex, geometry) VALUES (?, ?, ?, ?, ?, ?, LineFromText(?, 4326))", 
-                         (max_segid + 2, way, off + pos, length - pos, new_v_name, ev, wkt) )
+            cur.execute( "INSERT INTO way_segments (id, way, offset, length, vertex1, vertex2, geometry) VALUES (?, ?, ?, ?, ?, ?, LineFromText(?, 4326))", 
+                         (max_segid + 2, way, off + pos, length - pos, new_vid, ev, wkt) )
             # drop old segment 
             cur.execute( "DELETE FROM way_segments WHERE id = ?", (segid,) )
-            print "    Link to new vertex:", new_v_name
+            # print "    Link to new vertex:", new_vid
             self.conn.commit()            
-            return new_v_name
+            return new_vid
 
     def segments_to_edges(self, reporter = None) :
         print "Converting way segments into graph edges..."
         c = self.conn
         cur = c.cursor()
         cur.execute( "DROP TABLE IF EXISTS edges" )
-        cur.execute( "CREATE TABLE edges (id TEXT, wayid INTEGER, start_vertex TEXT, end_vertex TEXT, length FLOAT)" )
+        cur.execute( "CREATE TABLE edges (id INTEGER PRIMARY KEY, wayid INTEGER, vertex1 INTEGER, vertex2 INTEGER, length FLOAT)" )
         cur.execute( "SELECT AddGeometryColumn ( 'edges', 'geometry', 4326, 'LINESTRING', 2 )" )
         c.commit()
         def insert_edge( way, idx, sv, ev, length, geom ):
             wkt = "LINESTRING( %s )" % ( ','.join(geom) )
             id  = "w%d-%d" % (way, idx)
-            cur.execute( "INSERT INTO edges VALUES (?, ?, ?, ?, ?, LinestringFromText(?, 4326))", (id, way, sv, ev, length, wkt) )
-            # print "inserted", id
+            cur.execute( "INSERT INTO edges (wayid, vertex1, vertex2, length, geometry) VALUES (?, ?, ?, ?, LinestringFromText(?, 4326))", (way, sv, ev, length, wkt) )
             
         last_way = -1
         edge_length = 0
-        cur.execute( "SELECT way, dist, length, start_vertex, end_vertex FROM way_segments ORDER BY way, dist" )
+        cur.execute( "SELECT way, offset, length, vertex1, vertex2 FROM way_segments ORDER BY way, offset" )
         way_count = 0
-        for way, dist, length, sv, ev in cur.fetchall() :
-            try :
-                # get the segment start vertex coordinates
-                cur.execute( "SELECT x(geometry), y(geometry), refs FROM vertices WHERE id = ?", (sv,) )
-                slon, slat, srefs = cur.next()
-                # get the segment end vertex coordinates
-                cur.execute( "SELECT x(geometry), y(geometry), refs FROM vertices WHERE id = ?", (ev,) )
-                elon, elat, erefs = cur.next()
-            except :
-                print "error fetching info on vertices", sv, ev
-                # this is a real problem! missing vertices!
-                continue
+        for way, off, length, sv, ev in cur.fetchall() :
+            # get the segment start vertex coordinates
+            cur.execute( "SELECT x(geometry), y(geometry), refs FROM vertices WHERE id = ?", (sv,) )
+            slon, slat, srefs = cur.next()
+            # get the segment end vertex coordinates
+            cur.execute( "SELECT x(geometry), y(geometry), refs FROM vertices WHERE id = ?", (ev,) )
+            elon, elat, erefs = cur.next()
                 
             if way != last_way :
                 if edge_length > 0 :
@@ -531,7 +555,11 @@ class OSMDB:
                 edge_length = 0
                 edge_geom = ["%f %f" % (slon, slat)]
             edge_geom.append("%f %f" % (elon, elat))
-            edge_length += length
+            if length:
+                edge_length += length
+            else:
+                # what causes this?
+                print "segment length is None."
             if erefs > 1 :
                 insert_edge( way, idx, edge_sv, ev, edge_length, edge_geom )
                 idx += 1
@@ -543,7 +571,7 @@ class OSMDB:
 
         c.commit()   
     
-    def find_disjunct_graphs(self, delete_edges=True, mark_vertices=True, reporter=None) :
+    def find_disjunct_graphs(self, delete_edges=False, reporter=None) :
         if reporter : reporter.write( "Finding disjunct graphs...\n" )
         from graphserver.core import Graph, Link, State
         g = Graph()
@@ -566,9 +594,7 @@ class OSMDB:
                       
         print "Total number of vertices: ", len(vertices)
         iteration = 1
-        # graphno = {}
         c = self.cursor()
-        graphs = {}
         while True:
             try:
                 vertex, dummy = vertices.popitem()
@@ -577,59 +603,27 @@ class OSMDB:
             # is it ok to do this with the non-dijkstra altorithm?
             spt = g.shortest_path_tree(vertex, None, State(1,0))
             print "Found shortest path tree %d with %d vertices. Recording its vertices..." % (iteration, spt.size)
-            vlabels = [v.label for v in spt.vertices]
-            graphs[iteration] = vlabels
-            for vlabel in vlabels:
-                if mark_vertices : 
-                    c.execute( "UPDATE vertices SET subgraph = ? WHERE id = ?", (iteration, vlabel) )
-                vertices.pop(vlabel, None)
+            for i, v in enumerate(spt.vertices) :
+                if i % 50000 == 0 : print "Vertex", i
+                c.execute( "UPDATE vertices SET subgraph = ? WHERE id = ?", (iteration, v.label) )
+                vertices.pop(v.label, None)
             spt.destroy()
             print "%d vertices remaining." % (len(vertices))
             iteration += 1
         g.destroy()
         self.conn.commit()
         if delete_edges :
-            print "indexing way segment vertices..."
+            print "Indexing way_segments vertices..."
             c.execute( "CREATE INDEX IF NOT EXISTS way_segments_vertex1 ON way_segments (vertex1)" )
             c.execute( "CREATE INDEX IF NOT EXISTS way_segments_vertex2 ON way_segments (vertex2)" )
             c.execute( "SELECT subgraph, count(*) AS c FROM vertices GROUP BY subgraph ORDER BY c DESC LIMIT 1" )
             biggest_graph = c.next()[0]
+            print "Deleting way_segments that reference vertices in smaller disjunct graphs..."
             c.execute( """DELETE FROM way_segments WHERE id IN 
                          (SELECT ws.id FROM vertices AS v, way_segments AS ws 
                           WHERE v.subgraph != ? AND (ws.vertex1 = v.id OR ws.vertex2 = v.id) )""", (biggest_graph,) )
-            
-            # find key for max dict value: m = max(a, key=a.get)
-            #biggest_graph = max(graphs.iteritems(), key=lambda x:len(x[1])) [0]
-            #for k, v in graphs.iteritems() :
-            #    if k != biggest_graph :
-            #        print k
-                            
-        if mark_vertices :
-            # find distances from smaller graphs to nodes in other graphs
-            c.execute( "SELECT subgraph, count(*) AS c FROM vertices GROUP BY subgraph ORDER BY c DESC LIMIT 1" )
-            biggest_graph = c.next()[0]
-            c.execute( "SELECT id FROM vertices WHERE subgraph != ?", (biggest_graph,) ) 
-            small_graph_vertices = [x[0] for x in c.fetchall()]
-            results = []
-            EARTH_RADIUS = 6367000
-            PI_OVER_180 =  0.017453293    
-            for i, vertex in enumerate(small_graph_vertices):
-                if i % 5000 == 0 : print "Vertex", i
-                c.execute( "SELECT x(geometry), y(geometry), subgraph FROM vertices WHERE id = ?", (vertex,) )
-                lon, lat, subgraph = c.next()
-                r = 0.0005 
-                # WHERE id != ? AND
-                c.execute( """SELECT id, distance(MakePoint(?, ?), geometry), subgraph
-                              FROM vertices WHERE rowid IN 
-                              ( SELECT pkid FROM idx_vertices_geometry 
-                              WHERE xmin > ? AND xmax < ? AND ymin > ? AND ymax < ? )""", (lon, lat, lon - r, lon + r, lat - r, lat + r) )
-                for vid, dist, sg in c.fetchall():
-                    if vertex != vid : 
-                        dist *= EARTH_RADIUS * PI_OVER_180
-                        results.append((vertex, vid, dist, subgraph == sg))
-            for o, d, dist, same_graph in results:
-                # double links are already
-                if dist < 5: print o, d, dist, same_graph
+        self.conn.commit()
+        c.close()
 
         
 
@@ -645,11 +639,11 @@ def test_wayrecord():
     assert wr.nds == ['1','2','3']
 
 def osm_to_osmdb(osm_filename, osmdb_filename, tolerant=False):
-    #osmdb = OSMDB( osmdb_filename, overwrite=True )
-    osmdb = OSMDB( osmdb_filename, overwrite=False)   
-    #osmdb.populate( osm_filename, accept=lambda tags: 'highway' in tags, reporter=sys.stdout )
-    #osmdb.make_vertices_and_segments( reporter=sys.stdout )
-    osmdb.find_disjunct_graphs( reporter=sys.stdout )
+    osmdb = OSMDB( osmdb_filename, overwrite=True )
+    #osmdb = OSMDB( osmdb_filename, overwrite=False)   
+    osmdb.populate( osm_filename, reporter=sys.stdout )
+    osmdb.make_vertices_and_segments( reporter=sys.stdout )
+    osmdb.find_disjunct_graphs( delete_edges=True, reporter=sys.stdout )
     print "Done."
 
 def main():

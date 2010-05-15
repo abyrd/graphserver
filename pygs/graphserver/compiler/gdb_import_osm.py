@@ -45,6 +45,8 @@ def gdb_import_osm(gdb, osmdb, vertex_namespace, slogs, profiledb=None):
             street_id = street_names[street_name]
         
         # Create edges to be inserted into graph
+        # print id, distance, rise, fall
+        id = str(id)
         s1 = Street( id, distance, rise, fall )
         s2 = Street( id, distance, fall, rise )
         s1.way = street_id
