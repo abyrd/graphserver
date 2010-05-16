@@ -36,7 +36,7 @@ def main():
             cur.execute( "INSERT INTO osm_links VALUES (?, ?)", (stopid, link_vid) )
             gtfsdb.conn.commit()
         else :
-            print "for some reason, the osmdb didn't return a vertex."
+            print "The osmdb didn't find a vertex for linking."
         # debug
         # if i > 20 : break
     

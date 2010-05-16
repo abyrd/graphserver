@@ -449,7 +449,7 @@ class OSMDB:
         self.conn.commit()
         cur.close()
 
-    def find_or_make_link_vertex(self, lat, lon, split_threshold = 50, search_range = 0.005, max_dist = 2000, reporter = None) :
+    def find_or_make_link_vertex(self, lat, lon, split_threshold = 50, search_range = 0.005, max_dist = 500, reporter = None) :
         import ligeos as lg
         EARTH_RADIUS = 6367000
         PI_OVER_180 =  0.017453293    
@@ -472,8 +472,6 @@ class OSMDB:
         vid, d = cur.next()
         d *= (EARTH_RADIUS * PI_OVER_180)
         # print "    Closest endpoint vertex %s at %d meters" % (vid, d)
-        if length == None : # KLUDGE... why does this happen?
-             return vid
         if d < split_threshold and d < max_dist:
             # print "    Link to existing vertex."
             cur.execute( "UPDATE vertices SET refs = refs + 1 WHERE id = ?", (vid,) )
@@ -495,12 +493,15 @@ class OSMDB:
             stop = lg.GPoint(lon, lat)
             dist = ls.distance_pt(stop)
             pt   = ls.closest_pt(stop)
-# SHOULD CHECK THAT NEW POINT IS NOT FARTHER THAN threshold, otherwise you get useless splittings.
-# this might be responsible for 0 / none length segments
             if dist > max_dist:
                 return None
             # and its distance along the segment (float in range 0 to 1)
             pos  = ls.locate_point(pt) 
+            # if the ideal linking point is still an endpoint, return the closest existing vertex
+            # instead of splitting out a zero-length edge, which screws things up
+            if pos == 0 or pos == 1 :
+                return vid
+            # BUG sometimes length is None, dunno why yet.
             pos *= length 
             # print "    Ideal link point %d meters away, %d meters along segment." % (dist, pos)
             # make new vertex named wWAYdOFFSET
@@ -633,43 +634,46 @@ class OSMDB:
         self.conn.commit()
         c.close()
 
-    def make_grid(self, margin=200, reporter=None) :
-        """Set up distance-preserving projection system, make a grid over the study area and save its geographic coordinates"""
+    def make_grid(self, margin=200, step=100, reporter=None) :
+        """Make a grid over the study area, link it to the OSM segments, and save its geographic coordinates."""
         import pyproj
+        import sys
+        reporter = sys.stdout
         
         cur = self.conn.cursor()
         cur.execute( "DROP TABLE IF EXISTS grid" )
         cur.execute( "CREATE TABLE grid (x INTEGER, y INTEGER, vertex INTEGER)" )
-        cur.execute( "SELECT AddGeometryColumn ( 'grid', 'geometry', 4326, 'LINESTRING', 2 )" )
+        cur.execute( "SELECT AddGeometryColumn ( 'grid', 'geometry', 4326, 'POINT', 2 )" )
+        cur.execute( "SELECT AddGeometryColumn ( 'grid', 'link', 4326, 'LINESTRING', 2 )" )
         self.conn.commit()
 
         min_lon, min_lat = (-123.19, 45.23)
         max_lon, max_lat = (-122.19, 45.69)       
-        avg_lat = min_lat - max_lat / 2
-        
+        avg_lat = min_lat + (max_lat - min_lat) / 2.0
+        avg_lon = min_lon + (max_lon - min_lon) / 2.0
+        if reporter : reporter.write("Map center at: %f %f\n" % (avg_lat, avg_lon))
         geod = pyproj.Geod( ellps='WGS84' )
         min_lon, min_lat, arc_dist = geod.fwd(min_lon, min_lat, 180+45, margin)
-        max_lon, max_lat, arc_dist = geod.fwd(max_lon, max_lat,     45, margin)
-        proj = pyproj.Proj( proj='sinu', ellps='WGS84' )
-        min_x, min_y = proj( min_lon, min_lat )
-        proj = pyproj.Proj( proj='sinu', ellps='WGS84', lon_0=min_lon, y_0=-min_y ) # why doesn't m parameter work for scaling by 100?
-        max_x, max_y = proj( max_lon, max_lat )
-        max_x = int(max_x / 100)
-        max_y = int(max_y / 100)
+        # do max also
+        lon_step, dummy, arc_dist = geod.fwd(avg_lon, avg_lat, 90, step)
+        dummy, lat_step, arc_dist = geod.fwd(avg_lon, avg_lat,  0, step)
+        lon_step -= avg_lon
+        lat_step -= avg_lat
+        if reporter : reporter.write("%d meter steps at this latitude: lat %f lon %f\n" % (step, lat_step, lon_step))
+        max_x = int( (max_lon - min_lon) / lon_step ) + 1
+        max_y = int( (max_lat - min_lat) / lat_step ) + 1
         if reporter : reporter.write("Making grid with dimesions: %d x %d\n" % (max_x, max_y))
-        # later, use reshape/flat to switch between 1d and 2d array representation
-        for y in range( 0, max_y ) :
-            if y % 10 == 0 : print "Row %d / %d" % (y, max_y)
-            for x in range( 0, max_x ) :
-                # inverse project meters to lat/lon
-                lon, lat = proj ( x * 100, y * 100, inverse=True)
-                lnk = self.find_or_make_link_vertex(lat, lon, split_threshold = 200, search_range = 0.001, max_dist = 100)
-                if lnk == None :
-                    continue
+        for y in range(max_y) :
+            lat = min_lat + y * lat_step
+            if y % 10 == 0 : print "Lat %d / %d" % (y, max_y)
+            for x in range(max_x) :
+                lon = min_lon + x * lon_step
+                lnk = self.find_or_make_link_vertex(lat, lon, split_threshold = 100, search_range = 0.001, max_dist = 71)
+                if lnk == None : continue
                 cur.execute( "SELECT X(geometry), Y(geometry) FROM vertices WHERE id = ?", (lnk,) )
                 (lon2, lat2) = cur.next()
                 wkt = 'LINESTRING(%f %f, %f %f)' % (lon, lat, lon2, lat2)
-                cur.execute( "INSERT INTO grid VALUES (?, ?, ?, LineFromText(?, 4326))", (x, y, lnk, wkt) )
+                cur.execute( "INSERT INTO grid VALUES (?, ?, ?, MakePoint(?, ?, 4326), LineFromText(?, 4326))", (x, y, lnk, lon, lat, wkt) )
         self.conn.commit()
 
 def test_wayrecord():
