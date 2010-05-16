@@ -101,7 +101,9 @@ class OSMDB:
                 sys.exit(4)
 
         # do not wait for disk I/O to catch up
-        self.conn.execute( "PRAGMA synchronous=OFF" )
+        self.conn.execute( "PRAGMA synchronous = OFF" )
+        self.conn.execute( "PRAGMA journal_mode = OFF" ) # DELETE | TRUNCATE | PERSIST | MEMORY | OFF 
+        self.conn.execute( "PRAGMA cache_size = 200000" ) # PRAGMA cache_size = Number of 1k pages;
         if overwrite:
             self.setup()
             
@@ -447,7 +449,7 @@ class OSMDB:
         self.conn.commit()
         cur.close()
 
-    def find_or_make_link_vertex(self, lat, lon, split_threshold = 50, search_range = 0.005, reporter = None) :
+    def find_or_make_link_vertex(self, lat, lon, split_threshold = 50, search_range = 0.005, max_dist = 2000, reporter = None) :
         import ligeos as lg
         EARTH_RADIUS = 6367000
         PI_OVER_180 =  0.017453293    
@@ -459,7 +461,10 @@ class OSMDB:
         cur = self.conn.cursor()
         # get the closest way segment
         cur.execute( sql, (lon, lat, lon - search_range, lon + search_range, lat - search_range, lat + search_range) )
-        seg = cur.next() 
+        try:
+            seg = cur.next() 
+        except StopIteration:
+            return None
         segid, way, off, length, sv, ev, geom, d = seg
         # print "    Found segment %d. way %d offset %d." % (segid, way, off)
         # get the closest endpoint of this segment and its distance
@@ -467,7 +472,9 @@ class OSMDB:
         vid, d = cur.next()
         d *= (EARTH_RADIUS * PI_OVER_180)
         # print "    Closest endpoint vertex %s at %d meters" % (vid, d)
-        if d < split_threshold :
+        if length == None : # KLUDGE... why does this happen?
+             return vid
+        if d < split_threshold and d < max_dist:
             # print "    Link to existing vertex."
             cur.execute( "UPDATE vertices SET refs = refs + 1 WHERE id = ?", (vid,) )
             # this is real slow in synchronous I/O operation
@@ -490,6 +497,8 @@ class OSMDB:
             pt   = ls.closest_pt(stop)
 # SHOULD CHECK THAT NEW POINT IS NOT FARTHER THAN threshold, otherwise you get useless splittings.
 # this might be responsible for 0 / none length segments
+            if dist > max_dist:
+                return None
             # and its distance along the segment (float in range 0 to 1)
             pos  = ls.locate_point(pt) 
             pos *= length 
@@ -624,7 +633,44 @@ class OSMDB:
         self.conn.commit()
         c.close()
 
+    def make_grid(self, margin=200, reporter=None) :
+        """Set up distance-preserving projection system, make a grid over the study area and save its geographic coordinates"""
+        import pyproj
         
+        cur = self.conn.cursor()
+        cur.execute( "DROP TABLE IF EXISTS grid" )
+        cur.execute( "CREATE TABLE grid (x INTEGER, y INTEGER, vertex INTEGER)" )
+        cur.execute( "SELECT AddGeometryColumn ( 'grid', 'geometry', 4326, 'LINESTRING', 2 )" )
+        self.conn.commit()
+
+        min_lon, min_lat = (-123.19, 45.23)
+        max_lon, max_lat = (-122.19, 45.69)       
+        avg_lat = min_lat - max_lat / 2
+        
+        geod = pyproj.Geod( ellps='WGS84' )
+        min_lon, min_lat, arc_dist = geod.fwd(min_lon, min_lat, 180+45, margin)
+        max_lon, max_lat, arc_dist = geod.fwd(max_lon, max_lat,     45, margin)
+        proj = pyproj.Proj( proj='sinu', ellps='WGS84' )
+        min_x, min_y = proj( min_lon, min_lat )
+        proj = pyproj.Proj( proj='sinu', ellps='WGS84', lon_0=min_lon, y_0=-min_y ) # why doesn't m parameter work for scaling by 100?
+        max_x, max_y = proj( max_lon, max_lat )
+        max_x = int(max_x / 100)
+        max_y = int(max_y / 100)
+        if reporter : reporter.write("Making grid with dimesions: %d x %d\n" % (max_x, max_y))
+        # later, use reshape/flat to switch between 1d and 2d array representation
+        for y in range( 0, max_y ) :
+            if y % 10 == 0 : print "Row %d / %d" % (y, max_y)
+            for x in range( 0, max_x ) :
+                # inverse project meters to lat/lon
+                lon, lat = proj ( x * 100, y * 100, inverse=True)
+                lnk = self.find_or_make_link_vertex(lat, lon, split_threshold = 200, search_range = 0.001, max_dist = 100)
+                if lnk == None :
+                    continue
+                cur.execute( "SELECT X(geometry), Y(geometry) FROM vertices WHERE id = ?", (lnk,) )
+                (lon2, lat2) = cur.next()
+                wkt = 'LINESTRING(%f %f, %f %f)' % (lon, lat, lon2, lat2)
+                cur.execute( "INSERT INTO grid VALUES (?, ?, ?, LineFromText(?, 4326))", (x, y, lnk, wkt) )
+        self.conn.commit()
 
 def test_wayrecord():
     wr = WayRecord( "1", {'highway':'bumpkis'}, ['1','2','3'] )
