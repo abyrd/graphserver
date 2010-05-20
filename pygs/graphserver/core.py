@@ -219,22 +219,27 @@ class ShortestPathTree(Graph):
             of.write( "Distance,%s,%s,%s\n" % (fl, tl, ','.join(coords)) )
         of.close()
 
-    def dump_json(self, output_filename, osmdb):
+    def dump_json(self, output_filename, gdb):
         of = open(output_filename, 'w')
-        for e in self.vertices :
-            s  = e.best_state
+        coords = {}
+        for id, x, y in gdb.coords():
+            coords[id] = (x, y)
+        for v in self.vertices :
+            s  = v.best_state
             try:
                 fl = s.back_state.owner.label
+                ft = s.back_state.time                
                 tl = s.owner.label
-                t  = s.time
-                if fl[:4] != 'osm-' or tl[:4] != 'osm-' : continue
-                of.write( "Distance, %s, %s" % (fl, tl) )
-                for l in fl, tl :
-                    lon, lat = osmdb.execute( "SELECT x(geometry), y(geometry) FROM vertices WHERE id = ?", (l[4:],) ).next()
-                    of.write( ", %f, %f, %d" % (lon, lat, t) )
-                of.write("\n")
+                tt = s.time
+                e  = s.back_edge    
             except:
                 continue
+            if fl[:4] == 'osm-' : edgetype = 'Distance'
+            if fl[:4] == 'psv-' : edgetype = 'Distance'
+            of.write( "%s,%s,%s" % (edgetype, fl, tl) )
+            of.write( ",%f,%f,%d" % (coords[fl][0], coords[fl][1], ft) )
+            of.write( ",%f,%f,%d" % (coords[tl][0], coords[tl][1], tt) )
+            of.write("\n")
         of.close()
         
     def set_thicknesses(self, root_label):

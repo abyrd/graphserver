@@ -55,7 +55,7 @@ gShortestPathTreeRetro( Graph* this, char *from, char *to, State* init_state, Wa
         spt_u = du->owner;                            // Find out which vertex (u) this state belongs to.
         u = gGetVertex( this, spt_u->label );         // Get the corresponding vertex in the original graph.
         LOG("got state. %s %ld\n", spt_u->label, du->time);
-        // printf("V %s\n", spt_u->label);
+        //printf("V %s\n", spt_u->label);
 #ifndef RETRO
         if( du->time > maxtime ) break;               // Terminate if all subsequent states will have excessive times.
         ListNode* edges = vGetOutgoingEdgeList( u );  // Otherwise get the head of vertex v's edge list.
@@ -65,7 +65,7 @@ gShortestPathTreeRetro( Graph* this, char *from, char *to, State* init_state, Wa
 #endif
         while( edges ) {  
             Edge* edge = edges->data;                    // For each Edge out of u:
-            // printf("E %s %s\n", edge->from->label, edge->to->label);
+            //printf("%s,%s\n", edge->from->label, edge->to->label);
             LOG("got edge. %s %s\n", edge->from->label, edge->to->label);
 #ifndef RETRO
             v = edge->to;                                // Get the edge's destination (v),

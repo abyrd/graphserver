@@ -27,6 +27,7 @@ class GraphDatabase:
         c.execute( "CREATE TABLE vertices (label TEXT UNIQUE ON CONFLICT IGNORE)" )
         c.execute( "CREATE TABLE edges (vertex1 TEXT, vertex2 TEXT, edgetype TEXT, edgestate TEXT)" )
         c.execute( "CREATE TABLE resources (name TEXT UNIQUE ON CONFLICT IGNORE, image TEXT)" )
+        c.execute( "CREATE TABLE vertex_coords (id TEXT UNIQUE ON CONFLICT IGNORE, x FLOAT, y FLOAT)" )
     
         self.conn.commit()
         c.close()
@@ -152,7 +153,8 @@ class GraphDatabase:
             
     def index(self):
         c = self.conn.cursor()
-        c.execute( "CREATE INDEX vertices_label ON vertices (label)" )
+        c.execute( "CREATE INDEX IF NOT EXISTS vertices_label ON vertices (label)" )
+        c.execute( "CREATE INDEX IF NOT EXISTS vertex_coords_id ON vertex_coords(id)" )
         self.conn.commit()
         c.close()
         
@@ -184,6 +186,25 @@ class GraphDatabase:
         
         return g
         
+    def add_coords(self, v, x, y, outside_c=None):
+        c = outside_c or self.conn.cursor()
+        c.execute( "INSERT INTO vertex_coords (id, x, y) VALUES (?, ?, ?)", (v, x, y) )
+        if outside_c is None:
+            self.conn.commit()
+            c.close()
+
+    def dup_coords(self, v_old, v_new, outside_c=None):
+        c = outside_c or self.conn.cursor()
+        c.execute( "INSERT INTO vertex_coords SELECT ?, x, y FROM vertex_coords WHERE id = ?", (v_new, v_old) )
+        if outside_c is None:
+            self.conn.commit()
+            c.close()
+
+    def coords(self):
+        c = self.conn.cursor()
+        c.execute( "SELECT id, x, y FROM vertex_coords" )
+        return c.fetchall()
+        c.close()
 
 def main():
     if len(argv) < 2:

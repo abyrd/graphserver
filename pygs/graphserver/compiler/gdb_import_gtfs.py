@@ -38,7 +38,7 @@ def gdb_boardalight_load_bundle(gdb, agency_namespace, bundle, service_id, sc, t
             # construct the board/alight/dwell triangle for this patternstop
             patternstop_arrival_vx_name = "psv-%s-%03d-%03d-%s-arrive"%(agency_namespace,bundle.pattern.pattern_id,i,service_id)
             gdb.add_vertex( patternstop_arrival_vx_name, cursor )
-            
+            gdb.dup_coords( 'sta-%s' % stop_id, patternstop_arrival_vx_name, cursor ) 
             dwell_crossing = Crossing()
             for trip_id, arrival_time, departure_time, stop_id, stop_sequence, stop_dist_traveled in stop_time_bundle:
                 dwell_crossing.add_crossing_time( trip_id, departure_time-arrival_time )
@@ -52,6 +52,7 @@ def gdb_boardalight_load_bundle(gdb, agency_namespace, bundle, service_id, sc, t
             patternstop_vx_name = "psv-%s-%03d-%03d-%s"%(agency_namespace,bundle.pattern.pattern_id,i,service_id)
         
         gdb.add_vertex( patternstop_vx_name, cursor )
+        gdb.dup_coords( 'sta-%s' % stop_id, patternstop_vx_name, cursor ) 
 
         b = TripBoard(service_id, sc, tz, 0)
         for trip_id, arrival_time, departure_time, stop_id, stop_sequence, stop_dist_traveled in stop_time_bundle:
@@ -70,6 +71,7 @@ def gdb_boardalight_load_bundle(gdb, agency_namespace, bundle, service_id, sc, t
             patternstop_vx_name = "psv-%s-%03d-%03d-%s"%(agency_namespace,bundle.pattern.pattern_id,i+1,service_id)
             
         gdb.add_vertex( patternstop_vx_name, cursor )
+        gdb.dup_coords( 'sta-%s' % stop_id, patternstop_vx_name, cursor ) 
         
         al = Alight(service_id, sc, tz, 0)
         for trip_id, arrival_time, departure_time, stop_id, stop_sequence, stop_dist_traveled in stop_time_bundle:
@@ -137,6 +139,7 @@ def gdb_load_gtfsdb_to_boardalight(gdb, agency_namespace, gtfsdb, cursor, agency
         reporter.write("adding station vertex '%s'\n"%station_vertex_label)
         # DEBUG comment out below to speed up testing        
         gdb.add_vertex( station_vertex_label, c )
+        gdb.add_coords( station_vertex_label, stop_lon, stop_lat, c )
     gdb.commit()
     
     # compile trip bundles from gtfsdb
@@ -225,7 +228,11 @@ def gdb_load_gtfsdb_links(gdb, gtfsdb) :
     gtfscur = gtfsdb.get_cursor()
     gcur    = gdb.get_cursor()
     print "Loading OSM links..."
-    gtfscur.execute( "SELECT * FROM osm_links" );
+    try:
+        gtfscur.execute( "SELECT * FROM osm_links" );
+    except:
+        print "No OSM links table in database?"
+        return
     for i, (stopid, vertex) in enumerate(gtfscur.fetchall()) :
         # osm namespace should not be hard coded
         # add 2 links, one for each direction
@@ -259,6 +266,7 @@ def main():
     maxtrips = int(options.maxtrips) if options.maxtrips else None
     gdb_load_gtfsdb_to_boardalight(gdb, options.namespace, gtfsdb, gdb.get_cursor(), agency_id, maxtrips=maxtrips)
     gdb_load_gtfsdb_links(gdb, gtfsdb)
+    gdb.index()
     gdb.commit()
     
     print "done"

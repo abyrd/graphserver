@@ -500,8 +500,10 @@ class OSMDB:
             # if the ideal linking point is still an endpoint, return the closest existing vertex
             # instead of splitting out a zero-length edge, which screws things up
             if pos == 0 or pos == 1 :
+                cur.execute( "UPDATE vertices SET refs = refs + 1 WHERE id = ?", (vid,) )   
+                # this is real slow in synchronous I/O operation
+                self.conn.commit()
                 return vid
-            # BUG sometimes length is None, dunno why yet.
             pos *= length 
             # print "    Ideal link point %d meters away, %d meters along segment." % (dist, pos)
             # make new vertex named wWAYdOFFSET

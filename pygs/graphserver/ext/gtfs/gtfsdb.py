@@ -504,14 +504,22 @@ class GTFSDatabase:
                 
     # move me into init
     def make_geometry(self, reporter = None):
-        c = self.conn
-        c.enable_load_extension(True)
-        try :
-            c.execute("SELECT load_extension('libspatialite.dylib')")
-            c.execute("SELECT InitSpatialMetaData()")
-        except :
-            if reporter: reporter.write("Cannot make geometry columns. You need libspatialite.so.2, and pysqlite must be compiled with enable_load_extension.\n")
-            return
+        c = self.conn.cursor()        
+        try:
+            self.conn.enable_load_extension(True)
+        except:
+            print "To load spatialite extensions, pysqlite must have enable_load_extension compiled in."
+            sys.exit(3)
+        try:
+            c.execute("SELECT load_extension('libspatialite.so.2')")
+        except:
+            try:
+                c.execute("SELECT load_extension('libspatialite.dylib')")
+            except:    
+                sys.stderr.write("(Py)SQLite cannot find libspatialite.so.2 or libspatialite.dylib.\n")
+                sys.exit(4)
+
+        c.execute("SELECT InitSpatialMetaData()")
         # instead of initializing all the reference systems, add only WGS84 lat-lon
         if reporter: reporter.write("Initializing spatial database tables...\n")
         c.execute("INSERT INTO spatial_ref_sys (srid, auth_name, auth_srid, ref_sys_name, proj4text) VALUES (4326, 'epsg', 4326, 'WGS 84', '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs')")
@@ -520,7 +528,7 @@ class GTFSDatabase:
         c.execute("SELECT AddGeometryColumn ( 'stops', 'geometry', 4326, 'POINT', 2 )")
         c.execute("SELECT CreateSpatialIndex( 'stops', 'geometry' )")
         c.execute("UPDATE stops SET geometry = MakePoint( stop_lon, stop_lat, 4326 )")
-        c.commit()
+        self.conn.commit()
 
 
 def main_inspect_gtfsdb():

@@ -14,10 +14,10 @@ def gdb_import_osm(gdb, osmdb, vertex_namespace, slogs, profiledb=None):
     
     street_id_counter = 0
     street_names = {}
-    # note: tags is not in the edges table, it's a join. 
+    # note: tags is not in the edges table, it's a join.     
     for i, (id, parent_id, node1, node2, distance, tags) in enumerate( osmdb.edges() ):
         
-        if i%(n_edges//100+1)==0: sys.stdout.write( "%d/%d edges loaded\r\n"%(i, n_edges))
+        if i % 10000==0: sys.stdout.write( "%d / %d edges loaded\n"%(i, n_edges))
             
         # Find rise/fall of edge, if profiledb is given
         rise=0
@@ -62,7 +62,11 @@ def gdb_import_osm(gdb, osmdb, vertex_namespace, slogs, profiledb=None):
         oneway = tags.get("oneway")
         if oneway != "true" and oneway != "yes":
             gdb.add_edge( vertex2_label, vertex1_label, s2, cursor )
-            
+
+    sys.stdout.write( "loading vertex coordinates...\n" )
+    for id, lon, lat in osmdb.execute( "SELECT id, x(geometry), y(geometry) FROM vertices" ) :
+        gdb.add_coords( "%s-%s" % (vertex_namespace, id), lon, lat, cursor )
+    
     gdb.commit()
     
     print "indexing vertices..."

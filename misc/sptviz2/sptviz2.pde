@@ -526,8 +526,7 @@ void setup(){
   
   frame.addMouseWheelListener( new MouseWheelInput(spt) );
   
-  maxz = spt.extremes.maxz/0.005;
-
+  maxz = spt.extremes.maxz;
 }
 
 void draw() {
