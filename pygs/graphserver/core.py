@@ -205,6 +205,38 @@ class ShortestPathTree(Graph):
         
         return (pv, pe)
         
+    def dump_json2(self, output_filename, osmdb):
+        of = open(output_filename, 'w')
+        for e in self.edges :
+            fl = e.from_v.label
+            tl = e.to_v.label
+            if fl[:4] != 'osm-' or tl[:4] != 'osm-' : continue
+            t  = self.get_vertex(to_v).payload.time
+            coords = []
+            for l in el, fl :
+                lon, lat = osmdb.execute( "SELECT x(geometry) y(geometry) FROM vertices WHERE id = ?", (l[4:],) )
+                coords.extend(lon, lat, t)
+            of.write( "Distance,%s,%s,%s\n" % (fl, tl, ','.join(coords)) )
+        of.close()
+
+    def dump_json(self, output_filename, osmdb):
+        of = open(output_filename, 'w')
+        for e in self.vertices :
+            s  = e.best_state
+            try:
+                fl = s.back_state.owner.label
+                tl = s.owner.label
+                t  = s.time
+                if fl[:4] != 'osm-' or tl[:4] != 'osm-' : continue
+                of.write( "Distance, %s, %s" % (fl, tl) )
+                for l in fl, tl :
+                    lon, lat = osmdb.execute( "SELECT x(geometry), y(geometry) FROM vertices WHERE id = ?", (l[4:],) ).next()
+                    of.write( ", %f, %f, %d" % (lon, lat, t) )
+                of.write("\n")
+            except:
+                continue
+        of.close()
+        
     def set_thicknesses(self, root_label):
         lgs.gSetThicknesses( c_void_p(self.soul), c_char_p(root_label) )
 

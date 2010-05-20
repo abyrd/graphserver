@@ -510,7 +510,7 @@ void setup(){
 
   try {
 
-    spt = new SPT("ch.spt", 100, 100, 0.1);
+    spt = new SPT("ch.spt", 111000, 222000, 1);
 
   }
   catch(JSONException je) {
@@ -596,6 +596,7 @@ void keyPressed() {
         maxz += 60;
       }
       ortho(-maxsize*0.5, maxsize*0.5, -maxsize*0.5, maxsize*.5, -maxsize, maxsize);
+      println( maxz );
       //SPT nspt = spts.nextTree(currtime);
       //if(nspt != null) { spt = nspt; }
     }
