@@ -645,8 +645,9 @@ class OSMDB:
         cur = self.conn.cursor()
         cur.execute( "DROP TABLE IF EXISTS grid" )
         cur.execute( "CREATE TABLE grid (x INTEGER, y INTEGER, vertex INTEGER)" )
-        cur.execute( "SELECT AddGeometryColumn ( 'grid', 'geometry', 4326, 'POINT', 2 )" )
+        cur.execute( "SELECT AddGeometryColumn ( 'grid', 'geom_pt', 4326, 'POINT', 2 )" )
         cur.execute( "SELECT AddGeometryColumn ( 'grid', 'link', 4326, 'LINESTRING', 2 )" )
+        cur.execute( "SELECT AddGeometryColumn ( 'grid', 'geom_poly', 4326, 'POLYGON', 2 )" )
         self.conn.commit()
 
         min_lon, min_lat = (-123.19, 45.23)
@@ -665,17 +666,42 @@ class OSMDB:
         max_x = int( (max_lon - min_lon) / lon_step ) + 1
         max_y = int( (max_lat - min_lat) / lat_step ) + 1
         if reporter : reporter.write("Making grid with dimesions: %d x %d\n" % (max_x, max_y))
+        if reporter : reporter.write("Pass 1: splitting way segments where necessary...\n")
         for y in range(max_y) :
             lat = min_lat + y * lat_step
-            if y % 10 == 0 : print "Lat %d / %d" % (y, max_y)
+            if y % 10 == 0 : print "Row %d / %d" % (y, max_y)
             for x in range(max_x) :
                 lon = min_lon + x * lon_step
-                lnk = self.find_or_make_link_vertex(lat, lon, split_threshold = 100, search_range = 0.001, max_dist = 71)
-                if lnk == None : continue
-                cur.execute( "SELECT X(geometry), Y(geometry) FROM vertices WHERE id = ?", (lnk,) )
-                (lon2, lat2) = cur.next()
-                wkt = 'LINESTRING(%f %f, %f %f)' % (lon, lat, lon2, lat2)
-                cur.execute( "INSERT INTO grid VALUES (?, ?, ?, MakePoint(?, ?, 4326), LineFromText(?, 4326))", (x, y, lnk, lon, lat, wkt) )
+                # on first pass, do not save the link point or grid point, just make splits                
+                self.find_or_make_link_vertex(lat, lon, split_threshold = 100, search_range = 0.002, max_dist = 71)
+        if reporter : reporter.write("Pass 2: finding final links and saving grid to database...\n")
+        for y in range(max_y) :
+            lat = min_lat + y * lat_step
+            if y % 10 == 0 : print "Row %d / %d" % (y, max_y)
+            for x in range(max_x) :
+                lon = min_lon + x * lon_step
+                # on second pass, save the link point and grid point, make no splits.                
+                lnk = self.find_or_make_link_vertex(lat, lon, split_threshold = 999999, search_range = 0.005, max_dist = 500)
+                if lnk == None :
+                    # no road nearby, store only x, y, and a geographic point
+                    cur.execute( "INSERT INTO grid (x, y, geom_pt) VALUES (?, ?, MakePoint(?, ?, 4326))", (x, y, lon, lat) )
+                    # or not.
+                    # continue
+                else :
+                    # make a box around this point
+                    lon0 = lon  - lon_step / 2
+                    lon1 = lon0 + lon_step
+                    lat0 = lat  - lat_step / 2
+                    lat1 = lat0 + lat_step
+                    # why must polygons have 2 sets of parentheses?
+                    wkt_poly = "POLYGON((%f %f, %f %f, %f %f, %f %f, %f %f))" % (lon0, lat0, lon1, lat0, lon1, lat1, lon0, lat1, lon0, lat0)
+                    # get coords of the link vertex                    
+                    cur.execute( "SELECT X(geometry), Y(geometry) FROM vertices WHERE id = ?", (lnk,) )
+                    (lon_v, lat_v) = cur.next()
+                    wkt_lnk = 'LINESTRING(%f %f, %f %f)' % (lon, lat, lon_v, lat_v)
+                    cur.execute( "INSERT INTO grid VALUES (?, ?, ?, MakePoint(?, ?, 4326), LineFromText(?, 4326), PolyFromText(?, 4326))", 
+                                 (x, y, lnk, lon, lat, wkt_lnk, wkt_poly) )
+        # ref counts to vertices should really be updated here, not in the osmdb.find_or_make... method.
         self.conn.commit()
 
 def test_wayrecord():
