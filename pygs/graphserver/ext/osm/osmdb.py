@@ -681,7 +681,11 @@ class OSMDB:
             for x in range(max_x) :
                 lon = min_lon + x * lon_step
                 # on second pass, save the link point and grid point, make no splits.                
-                lnk = self.find_or_make_link_vertex(lat, lon, split_threshold = 999999, search_range = 0.005, max_dist = 500)
+                lnk = self.find_or_make_link_vertex(lat, lon, split_threshold = 999999, search_range = 0.002, max_dist = 500)
+                print x, y, lnk
+                if lnk == None :
+                    # print "no road found, looking farther away..."                    
+                    lnk = self.find_or_make_link_vertex(lat, lon, split_threshold = 999999, search_range = 0.01, max_dist = 5000)
                 if lnk == None :
                     # no road nearby, store only x, y, and a geographic point
                     cur.execute( "INSERT INTO grid (x, y, geom_pt) VALUES (?, ?, MakePoint(?, ?, 4326))", (x, y, lon, lat) )
