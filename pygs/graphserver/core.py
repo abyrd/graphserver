@@ -199,11 +199,24 @@ class Graph(CShadow):
             walk_options.destroy()
         else:
             ret = self._cshortest_path_tree( self.soul, fromv, tov, initstate.soul, walk_options.soul, c_long(maxtime), c_int(hoplimit), c_long(weightlimit) )
-        
+
         if ret is None:
 	  raise Exception( "Could not create shortest path tree" ) # this shouldn't happen; TODO: more descriptive error
 
 	return ret
+
+    def shortest_path_tree_assist(self, assist, fromv, tov, initstate, walk_options=None, maxtime=2000000000, hoplimit=1000000, weightlimit=2000000000):
+        #Graph* gShortestPathTree( Graph* this, char *from, char *to, State* init_state )
+        self.check_destroyed()
+        assist.check_destroyed()
+        if not tov:
+            print "this only makes sense with a destination."
+            return
+        
+        if walk_options is None:
+            print "set some walk options!"
+        else:
+            return self._cshortest_path_tree_assist( self.soul, assist.soul, fromv, tov, initstate.soul, walk_options.soul, c_long(maxtime), c_int(hoplimit), c_long(weightlimit) )
 
     def shortest_path_tree_retro(self, fromv, tov, finalstate, walk_options=None, mintime=0, hoplimit=1000000, weightlimit=2000000000):
         #Graph* gShortestPathTree( Graph* this, char *from, char *to, State* init_state )
@@ -1660,6 +1673,7 @@ Graph._cadd_edge = ccast(lgs.gAddEdge, Edge)
 Graph._cshortest_path_tree = ccast(lgs.gShortestPathTree, ShortestPathTree)
 Graph._cshortest_path_tree_retro = ccast(lgs.gShortestPathTreeRetro, ShortestPathTree)
 Graph._get_ch = ccast( lgs.get_contraction_hierarchies, ContractionHierarchy )
+Graph._cshortest_path_tree_assist = ccast(lgs.gShortestPathTreeAssist, ShortestPathTree)
 
 ShortestPathTree._cnew = lgs.sptNew
 ShortestPathTree._cdel = lgs.sptDestroy
