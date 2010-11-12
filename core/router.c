@@ -243,13 +243,14 @@ gShortestPathTreeAssist( Graph* this, ShortestPathTree* that, char *from, char *
                     SPTVertex *assist_v = sptGetVertex(that, v->label);
                     if (assist_v != NULL) {
                         //printf("vertex in assist tree: %s %ld\n", v->label, assist_v->state->time); 
-                        //new_w = new_dv->weight - init_state->time + assist_v->state->time; // assist SPT must be built from time=0
-                        if (new_dv->num_transfers == du->num_transfers) // give an unfair advantage to boarding edges to avoid hanging around in stations
-                            new_w += assist_v->state->time; // assist SPT must be built from time=0
-                        dirfibheap_insert_or_dec_key( q, v, new_w );    // rekey v in the priority queue
+                        // TEST only apply to osm labels
+                        new_w += assist_v->state->time; // assist SPT must be built from time=0
                     } else { 
-                        printf("vertex not in assist tree: %s (not added to queue)\n", v->label); 
+                        // unfair advantage for vertices not in assist tree (could be useful for giving priority to exploring transit)
+                        // printf("vertex not in assist tree: %s (no heuristic added)\n", v->label); 
+                        // new_w = 0;
                     }
+                    dirfibheap_insert_or_dec_key( q, v, new_w );    // rekey v in the priority queue
                     
                     // If this is the first time v has been reached
                     if( !spt_v ) {
